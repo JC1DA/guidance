@@ -19,6 +19,37 @@ class EngineCallResponse(BaseModel):
     new_token_count: NonNegativeInt
 
 
+class ModelToken(BaseModel):
+    bytes: bytes
+    is_generated: bool
+    log_prob: Optional[float]
+    masked_log_prob: Optional[float]
+    top_k: Optional[list["ModelToken"]]
+
+
+class EngineToken(BaseModel):
+    token: int
+    prob: Optional[float]
+
+
+class EngineResponse(BaseModel):
+    token: int
+    prob: float
+    top_k: list[EngineToken]
+    masked_top_k: Optional[list[EngineToken]]
+
+
+# class EngineCallResponse(BaseModel):
+#     backtrack: NonNegativeInt = 0
+#     tokens: list[ModelToken]
+
+
+# class ParserResponse(BaseModel):
+#     capture_groups: dict
+#     capture_group_log_probs: dict
+#     new_token_count: NonNegativeInt
+
+
 class GenData(BaseModel):
     tokens: list[int]
     mask: bytes
@@ -84,9 +115,7 @@ class LLProgress(RootModel):
                 cname = j.name
                 data = bytes.fromhex(j.hex)
                 if j.list_append:
-                    if cname not in capture_groups or not isinstance(
-                        capture_groups[cname], list
-                    ):
+                    if cname not in capture_groups or not isinstance(capture_groups[cname], list):
                         capture_groups[cname] = []
                         capture_group_log_probs[cname] = []
                     capture_groups[cname].append(data)

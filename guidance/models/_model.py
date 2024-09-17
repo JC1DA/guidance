@@ -24,7 +24,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-from .._schema import EngineCallResponse, GuidanceEngineMetrics
+from .._schema import EngineResponse, EngineToken, EngineCallResponse, GuidanceEngineMetrics
 from .._utils import softmax, CaptureEvents
 from .._parser import TokenParser
 from .._grammar import (
@@ -66,9 +66,13 @@ class Engine:
         self.compute_log_probs = compute_log_probs
         self.metrics = GuidanceEngineMetrics()
 
-    def get_chat_template(self): # TODO [HN]: Add more logic here...should we instantiate class here? do we even need to?
-        return self.tokenizer.chat_template() # Instantiate the class before returning to client for now
-    
+    def get_chat_template(
+        self,
+    ):  # TODO [HN]: Add more logic here...should we instantiate class here? do we even need to?
+        return (
+            self.tokenizer.chat_template()
+        )  # Instantiate the class before returning to client for now
+
     def reset_metrics(self):
         self.metrics = GuidanceEngineMetrics()
 
@@ -111,7 +115,7 @@ class Engine:
             grammar=grammar,
             tokenizer=self.tokenizer,
             prompt=prompt,
-            ensure_bos_token=ensure_bos_token
+            ensure_bos_token=ensure_bos_token,
         )
 
     def __call__(self, prompt, grammar, ensure_bos_token=True) -> Iterator[EngineCallResponse]:
@@ -136,29 +140,97 @@ class Engine:
             gen_data, response = parser.advance(token)
 
             if gen_data is not None:
-                if parser.is_accepting() and self.tokenizer.eos_token_id is not None:
+                # if parser.is_accepting() and self.tokenizer.eos_token_id is not None:
+                #     # Whenever we are in an accepting state, we will allow the model to generate whatever it wants
+                #     # but we will treat any "illegal" tokens as EOS, allowing the model to finish gracefully.
+                #     assert gen_data.mask[self.tokenizer.eos_token_id]
+                #     token = self.get_next_token(
+                #         token_ids=gen_data.tokens, mask=None, temperature=gen_data.temperature
+                #     )
+                #     if not gen_data.mask[token]:
+                #         token = self.tokenizer.eos_token_id
+                # else:
+                #     token = self.get_next_token(
+                #         token_ids=gen_data.tokens,
+                #         mask=gen_data.mask,
+                #         temperature=gen_data.temperature,
+                #     )
+
+                is_in_accepting_state = (
+                    parser.is_accepting() and self.tokenizer.eos_token_id is not None
+                )
+
+                mask = None
+                if is_in_accepting_state:
                     # Whenever we are in an accepting state, we will allow the model to generate whatever it wants
                     # but we will treat any "illegal" tokens as EOS, allowing the model to finish gracefully.
+                    # Hence, mask must be None
                     assert gen_data.mask[self.tokenizer.eos_token_id]
-                    token = self.get_next_token(
-                        token_ids=gen_data.tokens,
-                        mask=None,
-                        temperature=gen_data.temperature
-                    )
-                    if not gen_data.mask[token]:
-                        token = self.tokenizer.eos_token_id
                 else:
-                    token = self.get_next_token(
-                        token_ids=gen_data.tokens,
-                        mask=gen_data.mask,
-                        temperature=gen_data.temperature
-                    )
+                    mask = gen_data.mask
+
+                # token = self.get_next_token(
+                #     token_ids=gen_data.tokens, mask=mask, temperature=gen_data.temperature
+                # )
+
+                token = self.get_next_top_k_tokens(
+                    token_ids=gen_data.tokens, mask=mask, temperature=gen_data.temperature
+                )
+
+                if is_in_accepting_state and not gen_data.mask[token.token]:
+                    token.token = self.tokenizer.eos_token_id
+
             else:
                 token = None
 
             yield response
 
-    def get_next_token(self, token_ids: list[int], mask: Optional[bytes], temperature: float) -> int:
+    def get_next_top_k_tokens(
+        self, token_ids: list[int], mask: Optional[bytes], temperature: float, k: int = 5
+    ) -> EngineResponse:
+        logits = self.get_logits(token_ids)
+
+        # compute top-k without masking
+        probs = softmax(logits) if temperature < 0.0001 else softmax(logits / temperature)
+        top_k_indices = np.argsort(probs)[::-1][:k]
+        top_k_probs = probs[top_k_indices]
+
+        top_k: list[EngineToken] = []
+        for token, prob in zip(top_k_indices, top_k_probs):
+            top_k.append(
+                EngineToken(
+                    token=token,
+                    prob=prob,
+                )
+            )
+
+        # compute top-k with masking
+        masked_top_k: list[EngineToken] = []
+        if mask is not None:
+            masked_logits = logits * np.frombuffer(mask, dtype=np.uint8)
+            masked_probs = (
+                softmax(masked_logits)
+                if temperature < 0.0001
+                else softmax(masked_logits / temperature)
+            )
+            top_k_masked_indices = np.argsort(masked_probs)[::-1][:k]
+            top_k_masked_probs = masked_probs[top_k_masked_indices]
+
+            for masked_token, masked_prob in zip(top_k_masked_indices, top_k_masked_probs):
+                masked_top_k.append(EngineToken(token=masked_token, prob=masked_prob))
+
+        best_engine_token = masked_top_k[0] if len(masked_top_k) > 0 else top_k[0]
+
+        return EngineResponse(
+            token=best_engine_token.token,
+            prob=best_engine_token.prob,
+            top_k=top_k,
+            masked_top_k=None if not masked_top_k else masked_top_k,
+        )
+
+    def get_next_token(
+        self, token_ids: list[int], mask: Optional[bytes], temperature: float
+    ) -> int:
         """Base implementation for getting the next token from the model which calls get_logits and sample_with_temperature.
         Subclasses may override this method, e.g. if they use external APIs that do not support getting logits directly.
         """
@@ -169,13 +241,15 @@ class Engine:
     def get_logits(self, token_ids: list[int]) -> np.ndarray:
         raise NotImplementedError
 
-    def sample_with_temperature(self, logits: np.ndarray, mask: Optional[bytes], temperature: float) -> int:
+    def sample_with_temperature(
+        self, logits: np.ndarray, mask: Optional[bytes], temperature: float
+    ) -> int:
         if mask is not None:
             logits += np.frombuffer(mask, dtype=np.uint8)
         if temperature < 0.0001:
             return int(np.argmax(logits))
         # Get probabilities from softmax
-        probabilities = softmax(logits/temperature)
+        probabilities = softmax(logits / temperature)
         # Sample an index based on the probabilities
         sampled_index = np.random.choice(len(logits), p=probabilities)
         return sampled_index
@@ -225,10 +299,14 @@ class Model:
         #     tokenizer = Tokenizer(tokenizer)
 
         self.engine = engine
-        self.chat_template = engine.get_chat_template() # TODO [HN]: Should this be a method or attr?
+        self.chat_template = (
+            engine.get_chat_template()
+        )  # TODO [HN]: Should this be a method or attr?
         self.echo = echo
         self.token_count = 0  # tracks how many tokens our byte state represents
-        self.max_display_rate = 0.2  # this controls how frequently we are allowed to redraw the display (in seconds)
+        self.max_display_rate = (
+            0.2  # this controls how frequently we are allowed to redraw the display (in seconds)
+        )
         self.opened_blocks = {}  # what context blocks have been opened but not closed
         # self.compute_log_probs = compute_log_probs
 
@@ -237,10 +315,14 @@ class Model:
         self._variables_log_probs = {}  # these are the state variables stored with the model
         self._cache_state = {}  # mutable caching state used to save computation
         self._state = ""  # the current bytes that represent the state of the model
-        self._event_queue = None  # TODO: these are for streaming results in code, but that needs implemented
+        self._event_queue = (
+            None  # TODO: these are for streaming results in code, but that needs implemented
+        )
         self._event_parent = None
         self._last_display = 0  # used to track the last display call to enable throttling
-        self._last_event_stream = 0  # used to track the last event streaming call to enable throttling
+        self._last_event_stream = (
+            0  # used to track the last event streaming call to enable throttling
+        )
 
     @property
     def active_role_end(self):
@@ -305,7 +387,9 @@ class Model:
         new_lm.opened_blocks = self.opened_blocks.copy()
 
         # create a new clean event queue
-        new_lm._event_queue = None  # we start with no event queue because nobody is listening to us yet
+        new_lm._event_queue = (
+            None  # we start with no event queue because nobody is listening to us yet
+        )
 
         if self._event_queue is not None:
             # if the current lm has an event queue, we make it our parent
@@ -313,7 +397,7 @@ class Model:
 
         elif self._event_parent is not None:
             # otherwise if the current event que has an event parent then that is also our parent
-            new_lm._event_parent = self._event_parent  
+            new_lm._event_parent = self._event_parent
 
         return new_lm
 
@@ -427,9 +511,7 @@ class Model:
             # close any newly closed contexts
             for (pos, close_text), context in old_blocks:
                 if context.name is not None:
-                    lm._variables[context.name] = format_pattern.sub(
-                        "", lm._state[pos:]
-                    )
+                    lm._variables[context.name] = format_pattern.sub("", lm._state[pos:])
                 lm += context.closer
 
             # apply any newly opened contexts (new from this object's perspective)
@@ -437,7 +519,9 @@ class Model:
                 lm += context.opener
                 with grammar_only():
                     tmp = lm + context.closer
-                close_text = tmp._state[len(lm._state):]  # get the new state added by calling the closer
+                close_text = tmp._state[
+                    len(lm._state) :
+                ]  # get the new state added by calling the closer
                 lm.opened_blocks[context] = (len(lm._state), close_text)
 
                 # clear out names that we override
@@ -526,9 +610,7 @@ class Model:
         else:
             for context in list(reversed(self.opened_blocks)):
                 if context.name == key:
-                    return format_pattern.sub(
-                        "", self._state[self.opened_blocks[context][0] :]
-                    )
+                    return format_pattern.sub("", self._state[self.opened_blocks[context][0] :])
 
         raise KeyError(f"Model does not contain the variable '{key}'")
 
@@ -735,9 +817,11 @@ class Model:
 
                                 if k not in lm or not isinstance(lm._variables[k], list):
                                     lm._variables[k] = []
-                                if k not in lm._variables_log_probs or not isinstance(lm._variables_log_probs[k], list):
+                                if k not in lm._variables_log_probs or not isinstance(
+                                    lm._variables_log_probs[k], list
+                                ):
                                     lm._variables_log_probs[k] = []
-                                    
+
                                 lm._variables[k].append(inner_v)
                                 lm._variables_log_probs[k].append(
                                     chunk.capture_group_log_probs[k][i]
@@ -845,10 +929,7 @@ class Chat(Model):
             This kwargs are added to the role start as arguments.
         """
         return (
-            "<|im_start|>"
-            + role_name
-            + "".join([f' {k}="{v}"' for k, v in kwargs.items()])
-            + "\n"
+            "<|im_start|>" + role_name + "".join([f' {k}="{v}"' for k, v in kwargs.items()]) + "\n"
         )
 
     def get_role_end(self, role_name=None):

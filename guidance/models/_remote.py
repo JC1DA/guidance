@@ -7,6 +7,7 @@ from ..chat import ChatMLTemplate
 from ._tokenizer import Tokenizer
 from ._grammarless import GrammarlessTokenizer
 
+
 class RemoteEngine(Engine):
     """This connects to a remote guidance server and runs all computation using the remote engine."""
 
@@ -22,10 +23,12 @@ class RemoteEngine(Engine):
             tokenizer = GrammarlessTokenizer(tokenizer)
 
         # GrammarlessEngines must use the ChatML tokenizer
-        # TODO: Consider different enforcement of this 
+        # TODO: Consider different enforcement of this
         if tokenizer.chat_template is not ChatMLTemplate:
-            raise Exception("The tokenizer provided to the engine follows a non-ChatML format in its chat_template. \
-                    Using a transformers, tiktoken, or guidance.GrammarlessTokenizer directly will solve this issue.")
+            raise Exception(
+                "The tokenizer provided to the engine follows a non-ChatML format in its chat_template. \
+                    Using a transformers, tiktoken, or guidance.GrammarlessTokenizer directly will solve this issue."
+            )
         # build the Engine
         super().__init__(tokenizer=tokenizer, compute_log_probs=False)
 
