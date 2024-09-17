@@ -29,7 +29,7 @@ class ModelToken(BaseModel):
 
 class EngineToken(BaseModel):
     token: int
-    prob: Optional[float]
+    prob: float
 
 
 class EngineResponse(BaseModel):
