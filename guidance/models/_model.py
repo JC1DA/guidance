@@ -24,7 +24,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-from .._schema import EngineResponse, EngineToken, EngineCallResponse, GuidanceEngineMetrics
+from .._schema import EngineTokenInfo, GenToken, EngineCallResponse, GuidanceEngineMetrics
 from .._utils import softmax, CaptureEvents
 from .._parser import TokenParser
 from .._grammar import (
@@ -187,7 +187,7 @@ class Engine:
 
     def get_next_top_k_tokens(
         self, token_ids: list[int], mask: Optional[bytes], temperature: float, k: int = 5
-    ) -> EngineResponse:
+    ) -> EngineTokenInfo:
         logits = self.get_logits(token_ids)
 
         # compute top-k without masking
@@ -195,17 +195,18 @@ class Engine:
         top_k_indices = np.argsort(probs)[::-1][:k]
         top_k_probs = probs[top_k_indices]
 
-        top_k: list[EngineToken] = []
+        top_k: list[GenToken] = []
         for token, prob in zip(top_k_indices, top_k_probs):
             top_k.append(
-                EngineToken(
+                GenToken(
                     token=token,
                     prob=prob,
+                    bytes=self.tokenizer.decode([token]),
                 )
             )
 
         # compute top-k with masking
-        masked_top_k: list[EngineToken] = []
+        masked_top_k: list[GenToken] = []
         if mask is not None:
             masked_logits = logits * np.frombuffer(mask, dtype=np.uint8)
             masked_probs = (
@@ -217,13 +218,20 @@ class Engine:
             top_k_masked_probs = masked_probs[top_k_masked_indices]
 
             for masked_token, masked_prob in zip(top_k_masked_indices, top_k_masked_probs):
-                masked_top_k.append(EngineToken(token=masked_token, prob=masked_prob))
+                masked_top_k.append(
+                    GenToken(
+                        token=masked_token,
+                        prob=masked_prob,
+                        bytes=self.tokenizer.decode([masked_token]),
+                    )
+                )
 
         best_engine_token = masked_top_k[0] if len(masked_top_k) > 0 else top_k[0]
 
-        return EngineResponse(
+        return EngineTokenInfo(
             token=best_engine_token.token,
             prob=best_engine_token.prob,
+            bytes=best_engine_token.bytes,
             top_k=top_k,
             masked_top_k=None if not masked_top_k else masked_top_k,
         )

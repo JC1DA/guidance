@@ -7,7 +7,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ._grammar import GrammarFunction, Join, Terminal
-from ._schema import GenData, EngineCallResponse, LLInterpreterResponse, EngineResponse
+from ._schema import GenData, EngineCallResponse, LLInterpreterResponse, EngineTokenInfo
 from .models._byte_tokenizer import ByteTokenizer
 from .models._tokenizer import Tokenizer
 
@@ -67,7 +67,7 @@ class TokenParser:
     #         return None, e.value
 
     def advance(
-        self, token: Optional[EngineResponse]
+        self, token: Optional[EngineTokenInfo]
     ) -> Tuple[Optional[GenData], EngineCallResponse]:
         try:
             return self._generator.send(token)
@@ -96,10 +96,19 @@ class TokenParser:
     ]:
         tokens = self._process_prompt(prompt=prompt, ensure_bos_token=ensure_bos_token)
 
+        token = None
+        engine_resp = None
+        backtrack = 0
+
         while True:
             mask, resp = self.ll_interpreter.mid_process()
             r = LLInterpreterResponse.model_validate_json(resp)
             response = r.progress.to_engine_call_response()
+
+            # update response
+            response.backtrack = backtrack
+            response.token_info = engine_resp
+
             if r.stop:
                 break
 
@@ -111,7 +120,7 @@ class TokenParser:
                     temperature=r.temperature,
                 )
                 # Send caller the mask and response; wait for token
-                engine_resp: EngineResponse = yield (gen_data, response)
+                engine_resp: EngineTokenInfo = yield (gen_data, response)
                 if engine_resp is None:
                     raise TokenParserException("Expected engine_resp, got None")
 
@@ -123,9 +132,9 @@ class TokenParser:
                     raise InvalidTokenException(token, gen_data.valid_next_tokens, tokens)
             else:
                 gen_data = None
-                token = yield (gen_data, response)
-                if token is not None:
-                    raise TokenParserException(f"Expected None, got token {token}")
+                engine_resp: EngineTokenInfo = yield (gen_data, response)
+                if engine_resp is not None:
+                    raise TokenParserException(f"Expected None, got {type(engine_resp)}")
 
             backtrack, ff_tokens = self.ll_interpreter.post_process(token)
             if backtrack:

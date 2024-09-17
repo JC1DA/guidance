@@ -17,6 +17,8 @@ class EngineCallResponse(BaseModel):
     capture_groups: dict
     capture_group_log_probs: dict
     new_token_count: NonNegativeInt
+    backtrack: NonNegativeInt = 0
+    token_info: Optional["EngineTokenInfo"] = None
 
 
 class ModelToken(BaseModel):
@@ -27,16 +29,18 @@ class ModelToken(BaseModel):
     top_k: Optional[list["ModelToken"]]
 
 
-class EngineToken(BaseModel):
+class GenToken(BaseModel):
     token: int
     prob: float
+    bytes: bytes
 
 
-class EngineResponse(BaseModel):
+class EngineTokenInfo(BaseModel):
     token: int
     prob: float
-    top_k: list[EngineToken]
-    masked_top_k: Optional[list[EngineToken]]
+    bytes: bytes
+    top_k: list[GenToken]
+    masked_top_k: Optional[list[GenToken]]
 
 
 # class EngineCallResponse(BaseModel):
