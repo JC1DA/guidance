@@ -8,6 +8,7 @@ import textwrap
 import threading
 import time
 import warnings
+import json
 
 from pprint import pprint
 from typing import Any, Dict, Iterator, List, Optional, Union, TYPE_CHECKING
@@ -60,12 +61,30 @@ image_pattern = re.compile(r"&lt;\|_image:(.*?)\|&gt;")
 
 
 def visualize_data(
-    _lm, text: str, prob: float, rbg: tuple[int, int, int], use_strickthrough: bool
+    _lm,
+    text: str,
+    prob: float,
+    top_k: Union[List[GenToken], None],
+    masked_top_k: Union[list[GenToken], None],
+    rbg: tuple[int, int, int],
+    use_strickthrough: bool,
 ):
+    if top_k is None:
+        top_k = []
+
+    if masked_top_k is None:
+        masked_top_k = []
+
+    _top_k = {t.bytes.decode("utf-8"): f"{t.prob:.3f}" for t in top_k}
+    _masked_top_k = {t.bytes.decode("utf-8"): f"{t.prob:.3f}" for t in masked_top_k}
+
+    _top_k = json.dumps(_top_k)
+    _masked_top_k = json.dumps(_masked_top_k)
+
     if use_strickthrough:
-        _lm._display_state += f"<||_html:<s><span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob}'>_||>"
+        _lm._display_state += f"<||_html:<s><span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob:.3f} top_k:{_top_k} masked_top_k:{_masked_top_k}'>_||>"
     else:
-        _lm._display_state += f"<||_html:<span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob}'>_||>"
+        _lm._display_state += f"<||_html:<span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob:.3f} top_k:{_top_k} masked_top_k:{_masked_top_k}'>_||>"
 
     _lm._display_state += text
 
@@ -845,11 +864,17 @@ class Model:
             # else:
             #     print(f"'{node.bytes.decode('utf8')}'", None)
 
+            associated_token = node.associated_token
+            top_k = None if associated_token is None else associated_token.top_k
+            masked_top_k = None if associated_token is None else associated_token.masked_top_k
+
             if not node.is_generated:
                 if not node.is_backtracked:
                     _lm._display_state += node.bytes.decode("utf8")
                 else:
-                    visualize_data(_lm, node.bytes.decode("utf8"), 1.0, (0, 0, 255), True)
+                    visualize_data(
+                        _lm, node.bytes.decode("utf8"), 1.0, top_k, masked_top_k, (0, 0, 255), True
+                    )
             else:
                 if node.bytes != node.associated_token.bytes:
                     color = (0, 0, 255) if node.is_backtracked else (255, 0, 0)
@@ -857,6 +882,8 @@ class Model:
                         _lm,
                         node.associated_token.bytes.decode("utf8"),
                         node.associated_token.prob,
+                        top_k,
+                        masked_top_k,
                         color,
                         True,
                     )
@@ -865,6 +892,8 @@ class Model:
                     _lm,
                     node.bytes.decode("utf8"),
                     node.associated_token.prob,
+                    top_k,
+                    masked_top_k,
                     (0, 255, 0),
                     False,
                 )
@@ -952,7 +981,13 @@ class Model:
                     num_tokens = len(self.engine.tokenizer.encode(new_text.encode("utf8")))
                     for _ in range(num_tokens):
                         lm._vis_tokens.pop()  # number of pop depends on how many tokens in new_text
-                    visualize_data(lm, new_text, 1.0, (0, 255, 0), False)
+
+                    associated_token = current_vis_token.associated_token
+                    top_k = None if associated_token is None else associated_token.top_k
+                    masked_top_k = (
+                        None if associated_token is None else associated_token.masked_top_k
+                    )
+                    visualize_data(lm, new_text, 1.0, top_k, masked_top_k, (0, 255, 0), False)
 
                 lm._vis_tokens.append(current_vis_token)
 
