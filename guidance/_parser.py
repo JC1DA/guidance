@@ -96,6 +96,8 @@ class TokenParser:
     ]:
         tokens = self._process_prompt(prompt=prompt, ensure_bos_token=ensure_bos_token)
 
+        print("prompt", prompt)
+
         token = None
         engine_resp = None
         backtrack = 0
@@ -108,6 +110,9 @@ class TokenParser:
             # update response
             response.backtrack = backtrack
             response.token_info = engine_resp
+
+            print(self.tokenizer.decode(tokens))
+            print(backtrack, response.new_bytes, self.tokenizer.decode([token]) if token is not None else None)
 
             if r.stop:
                 break

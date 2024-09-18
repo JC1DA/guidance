@@ -21,12 +21,12 @@ class EngineCallResponse(BaseModel):
     token_info: Optional["EngineTokenInfo"] = None
 
 
-class ModelToken(BaseModel):
-    bytes: bytes
-    is_generated: bool
-    log_prob: Optional[float]
-    masked_log_prob: Optional[float]
-    top_k: Optional[list["ModelToken"]]
+# class ModelToken(BaseModel):
+#     bytes: bytes
+#     is_generated: bool
+#     log_prob: Optional[float]
+#     masked_log_prob: Optional[float]
+#     top_k: Optional[list["ModelToken"]]
 
 
 class GenToken(BaseModel):
@@ -39,8 +39,12 @@ class EngineTokenInfo(BaseModel):
     token: int
     prob: float
     bytes: bytes
-    top_k: list[GenToken]
+    top_k: Optional[list[GenToken]]
     masked_top_k: Optional[list[GenToken]]
+
+class VisTokenInfo(EngineTokenInfo):
+    is_generated: bool
+    is_backtracked: bool = False
 
 
 # class EngineCallResponse(BaseModel):

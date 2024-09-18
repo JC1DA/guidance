@@ -24,7 +24,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-from .._schema import EngineTokenInfo, GenToken, EngineCallResponse, GuidanceEngineMetrics
+from .._schema import EngineTokenInfo, GenToken, EngineCallResponse, GuidanceEngineMetrics, VisTokenInfo
 from .._utils import softmax, CaptureEvents
 from .._parser import TokenParser
 from .._grammar import (
@@ -332,6 +332,10 @@ class Model:
             0  # used to track the last event streaming call to enable throttling
         )
 
+        self._display_state = ""  # the current bytes that represent the state of the model for visualization
+        self._tokens = []  # track the tokens we have generated so far
+        self._vis_tokens: list[VisTokenInfo] = [] # track the tokens we want to visualize
+
     @property
     def active_role_end(self):
         """The default end patterns we should use for `gen` calls.
@@ -352,7 +356,8 @@ class Model:
 
     def _html(self):
         """Generate HTML that displays the model object."""
-        display_out = self._state
+        # display_out = self._state
+        display_out = self._display_state
         for context in reversed(self.opened_blocks):
             display_out += self.opened_blocks[context][1]
         display_out = html.escape(display_out)
@@ -407,6 +412,10 @@ class Model:
             # otherwise if the current event que has an event parent then that is also our parent
             new_lm._event_parent = self._event_parent
 
+        new_lm._tokens = self._tokens.copy()
+        for item in self._vis_tokens:
+            new_lm._vis_tokens.append(item.model_copy(deep=True))
+
         return new_lm
 
     def _inplace_append(self, value, force_silent=False):
@@ -423,6 +432,22 @@ class Model:
 
         # update the byte state
         self._state += str(value)  # TODO: make _state to be bytes not a string
+        self._display_state += str(value)
+
+        # compute the tokens of new value
+        _tokens = self.engine.tokenizer.encode(value)
+        for _token in _tokens:
+            self._vis_tokens.append(
+                VisTokenInfo(
+                    token=_token,
+                    prob=1.0,
+                    bytes=self.engine.tokenizer.decode([_token]),
+                    top_k=None,
+                    masked_top_k=None,
+                    is_generated=False,
+                    is_backtracked=False,
+                )
+            )
 
         # see if we should update the display
         if not force_silent:
@@ -795,13 +820,65 @@ class Model:
                     continue
                 delayed_bytes = b""
 
+                token_info = chunk.token_info
+
+                if token_info is not None and token_info.bytes != chunk.new_bytes:
+                    # parse modified bytes from the language model, print out with strikethrough
+                    lm._display_state += f"<||_html:<s><span style='background-color: rgba({255*token_info.prob + 0}, {0*token_info.prob + 0}, 0, {0.15}); border-radius: 3px;' title='{token_info.prob}'>_||>"
+                    lm._display_state += token_info.bytes.decode("utf8")
+                    lm._display_state += "<||_html:</span></s>_||>"
+
                 if len(chunk.new_bytes) > 0:
                     generated_value += new_text
+
+                    new_bytes_prob = chunk.new_bytes_prob if token_info is None else token_info.prob
+
                     if chunk.is_generated:
-                        lm += f"<||_html:<span style='background-color: rgba({165*(1-chunk.new_bytes_prob) + 0}, {165*chunk.new_bytes_prob + 0}, 0, {0.15}); border-radius: 3px;' title='{chunk.new_bytes_prob}'>_||>"
+                        #lm += f"<||_html:<span style='background-color: rgba({165*(1-new_bytes_prob) + 0}, {165*new_bytes_prob + 0}, 0, {0.15}); border-radius: 3px;' title='{new_bytes_prob}'>_||>"
+                        lm += f"<||_html:<span style='background-color: rgba(0, 165, 0, {0.15}); border-radius: 3px;' title='{new_bytes_prob}'>_||>"
                     lm += new_text
                     if chunk.is_generated:
                         lm += "<||_html:</span>_||>"
+
+                # if (len(chunk.new_bytes) > 0 and chunk.backtrack > 0) or len(chunk.new_bytes) == 0:
+                #     if chunk.backtrack:
+                #         for backtrack_idx in range(chunk.backtrack -1, -1, -1):
+                #             last_token_info: EngineTokenInfo = self._tokens[-1 - backtrack_idx]
+                #             lm += f"<||_html:<s><span style='background-color: rgba({165*(1-last_token_info.prob) + 0}, {165*last_token_info.prob + 0}, 0, {0.15}); border-radius: 3px;' title='{last_token_info.prob}'>_||>"
+                #             lm += last_token_info.bytes.decode("utf8")
+                #             lm += "<||_html:</span></s>_||>"
+                    
+                #     if token_info is not None:
+                #         lm += f"<||_html:<s><span style='background-color: rgba({165*(1-token_info.prob) + 0}, {165*token_info.prob + 0}, 0, {0.15}); border-radius: 3px;' title='{token_info.prob}'>_||>"
+                #         lm += token_info.bytes.decode("utf8")
+                #         lm += "<||_html:</span></s>_||>"
+
+                self._tokens.append(token_info)
+
+                for backtrack_idx in range(chunk.backtrack):
+                    self._vis_tokens[-1 - backtrack_idx].is_backtracked = True
+
+                self._vis_tokens.append(VisTokenInfo(
+                    token=token_info.token,
+                    prob=token_info.prob,
+                    bytes=token_info.bytes,
+                    top_k=token_info.top_k,
+                    masked_top_k=token_info.masked_top_k,
+                    is_generated=chunk.is_generated,
+                    is_backtracked=chunk.backtrack > 0,
+                ))
+
+                if chunk.backtrack:
+                    # force re-calculate display state
+                    lm._display_state = ""
+                    for vis_token in self._vis_tokens:
+                        if not vis_token.is_generated:
+                            lm._display_state += vis_token.bytes.decode("utf8")
+                        else:
+                            if vis_token.is_backtracked:
+                                lm._display_state += f"<||_html:<s><span style='background-color: rgba(0, , 255, {0.15}); border-radius: 3px;' title='{vis_token.prob}'>_||>"
+                                lm._display_state += vis_token.bytes.decode("utf8")
+                                lm._display_state += "<||_html:</span></s>_||>"
 
                 # last_is_generated = chunk.is_generated
 
