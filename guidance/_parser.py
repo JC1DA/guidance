@@ -96,7 +96,7 @@ class TokenParser:
     ]:
         tokens = self._process_prompt(prompt=prompt, ensure_bos_token=ensure_bos_token)
 
-        print("prompt", prompt)
+        # print("prompt", prompt)
 
         token = None
         engine_resp = None
@@ -111,8 +111,12 @@ class TokenParser:
             response.backtrack = backtrack
             response.token_info = engine_resp
 
-            print(self.tokenizer.decode(tokens))
-            print(backtrack, response.new_bytes, self.tokenizer.decode([token]) if token is not None else None)
+            # print(self.tokenizer.decode(tokens))
+            # print(
+            #     backtrack,
+            #     response.new_bytes,
+            #     self.tokenizer.decode([token]) if token is not None else None,
+            # )
 
             if r.stop:
                 break
@@ -142,9 +146,12 @@ class TokenParser:
                     raise TokenParserException(f"Expected None, got {type(engine_resp)}")
 
             backtrack, ff_tokens = self.ll_interpreter.post_process(token)
+            backtracked_tokens = tokens[-backtrack:] if backtrack else []
             if backtrack:
                 tokens = tokens[:-backtrack]
             tokens = tokens + ff_tokens
+
+            # print("backtrack", backtrack, backtracked_tokens)
 
         stop_reason = self.ll_interpreter.stop_reason()
         if stop_reason not in {"NoExtension", "EndOfSentence"}:
