@@ -851,8 +851,8 @@ class Model:
                 else:
                     visualize_data(_lm, node.bytes.decode("utf8"), 1.0, (0, 0, 255), True)
             else:
-                color = (0, 0, 255) if node.is_backtracked else (0, 255, 0)
                 if node.bytes != node.associated_token.bytes:
+                    color = (0, 0, 255) if node.is_backtracked else (255, 0, 0)
                     visualize_data(
                         _lm,
                         node.associated_token.bytes.decode("utf8"),
