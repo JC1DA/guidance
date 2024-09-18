@@ -82,9 +82,9 @@ def visualize_data(
     _masked_top_k = json.dumps(_masked_top_k)
 
     if use_strickthrough:
-        _lm._display_state += f"<||_html:<s><span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob:.3f} top_k:{_top_k} masked_top_k:{_masked_top_k}'>_||>"
+        _lm._display_state += f"<||_html:<s><span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob:.3f}\ntop_k:{_top_k}\nmasked_top_k:{_masked_top_k}'>_||>"
     else:
-        _lm._display_state += f"<||_html:<span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob:.3f} top_k:{_top_k} masked_top_k:{_masked_top_k}'>_||>"
+        _lm._display_state += f"<||_html:<span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob:.3f}\ntop_k:{_top_k}\nmasked_top_k:{_masked_top_k}'>_||>"
 
     _lm._display_state += text
 
@@ -239,6 +239,9 @@ class Engine:
 
         top_k: list[GenToken] = []
         for token, prob in zip(top_k_indices, top_k_probs):
+            if prob <= 0:
+                break
+
             top_k.append(
                 GenToken(
                     token=token,
@@ -260,6 +263,9 @@ class Engine:
             top_k_masked_probs = masked_probs[top_k_masked_indices]
 
             for masked_token, masked_prob in zip(top_k_masked_indices, top_k_masked_probs):
+                if masked_prob <= 0:
+                    break
+
                 masked_top_k.append(
                     GenToken(
                         token=masked_token,
@@ -888,15 +894,18 @@ class Model:
                         True,
                     )
 
-                visualize_data(
-                    _lm,
-                    node.bytes.decode("utf8"),
-                    node.associated_token.prob,
-                    top_k,
-                    masked_top_k,
-                    (0, 255, 0),
-                    False,
-                )
+                if node.is_generated:
+                    visualize_data(
+                        _lm,
+                        node.bytes.decode("utf8"),
+                        node.associated_token.prob,
+                        top_k,
+                        masked_top_k,
+                        (0, 255, 0),
+                        False,
+                    )
+                else:
+                    _lm._display_state += node.bytes.decode("utf8")
 
         # single generation
         if n == 1:
