@@ -384,6 +384,7 @@ class Model:
             ""  # the current bytes that represent the state of the model for visualization
         )
         self._vis_tokens: list[VisBytesString] = []  # track the tokens we want to visualize
+        self._last_inplace_append_len = 0  # track the length of the last inplace append
 
     @property
     def active_role_end(self):
@@ -476,6 +477,8 @@ class Model:
                 )
             )
 
+        new_lm._last_inplace_append_len = self._last_inplace_append_len
+
         return new_lm
 
     def _inplace_append(self, value, force_silent=False):
@@ -490,28 +493,32 @@ class Model:
             The bytes we should append to our current state.
         """
 
-        # update the byte state
-        self._state += str(value)  # TODO: make _state to be bytes not a string
-        self._display_state += str(value)
+        if str(value):
+            # update the byte state only if we have a non-empty string
+            self._state += str(value)  # TODO: make _state to be bytes not a string
+            self._display_state += str(value)
 
-        # compute the tokens of new value
-        _tokens = self.engine.tokenizer.encode(value.encode("utf8"))
-        for _token in _tokens:
-            _bytes = self.engine.tokenizer.decode([_token])
-            self._vis_tokens.append(
-                VisBytesString(
-                    bytes=_bytes,
-                    is_generated=False,
-                    is_backtracked=False,
-                    associated_token=EngineTokenInfo(
-                        token=_token,
-                        prob=1.0,
+            # compute the tokens of new value
+            # TODO: should we do this here?
+            _tokens = self.engine.tokenizer.encode(value.encode("utf8"))
+            for _token in _tokens:
+                _bytes = self.engine.tokenizer.decode([_token])
+                self._vis_tokens.append(
+                    VisBytesString(
                         bytes=_bytes,
-                        top_k=None,
-                        masked_top_k=None,
-                    ),
+                        is_generated=False,
+                        is_backtracked=False,
+                        associated_token=EngineTokenInfo(
+                            token=_token,
+                            prob=1.0,
+                            bytes=_bytes,
+                            top_k=None,
+                            masked_top_k=None,
+                        ),
+                    )
                 )
-            )
+            self._last_inplace_append_len = len(_tokens)
+            # print(value, self._last_inplace_append_len)
 
         # see if we should update the display
         if not force_silent:
@@ -987,8 +994,13 @@ class Model:
 
                     # hack
                     lm._display_state = lm._display_state[: -len(str(new_text))]
-                    num_tokens = len(self.engine.tokenizer.encode(new_text.encode("utf8")))
-                    for _ in range(num_tokens):
+
+                    # num_tokens = len(self.engine.tokenizer.encode(new_text.encode("utf8")))
+                    # assert (
+                    #     num_tokens == lm._last_inplace_append_len
+                    # ), f"{num_tokens} != {lm._last_inplace_append_len}"
+
+                    for _ in range(lm._last_inplace_append_len):
                         lm._vis_tokens.pop()  # number of pop depends on how many tokens in new_text
 
                     associated_token = current_vis_token.associated_token
@@ -996,47 +1008,10 @@ class Model:
                     masked_top_k = (
                         None if associated_token is None else associated_token.masked_top_k
                     )
-                    visualize_data(lm, new_text, 1.0, top_k, masked_top_k, (0, 255, 0), False)
+                    prob = associated_token.prob if associated_token is not None else 1.0
+                    visualize_data(lm, new_text, prob, top_k, masked_top_k, (0, 255, 0), False)
 
                 lm._vis_tokens.append(current_vis_token)
-
-                # if chunk.backtrack:
-                #     # force re-calculate display state
-                #     lm._display_state = ""
-                #     for vis_token in self._vis_tokens:
-                #         if not vis_token.is_generated:
-                #             if not vis_token.is_backtracked:
-                #                 lm._display_state += vis_token.bytes.decode("utf8")
-                #             else:
-                #                 lm._display_state += f"<||_html:<s><span style='background-color: rgba(0, 0, 255, {0.15}); border-radius: 3px;'>_||>"
-                #                 lm._display_state += vis_token.bytes.decode("utf8")
-                #                 lm._display_state += "<||_html:</span></s>_||>"
-                #         else:
-                #             if vis_token.is_backtracked:
-                #                 lm._display_state += f"<||_html:<s><span style='background-color: rgba(0, 0, 255, {0.15}); border-radius: 3px;' title='{vis_token.associated_token.prob}'>_||>"
-                #                 lm._display_state += vis_token.bytes.decode("utf8")
-                #                 lm._display_state += "<||_html:</span></s>_||>"
-                #             else:
-                #                 associated_token = vis_token.associated_token
-
-                #                 if (
-                #                     associated_token is not None
-                #                     and vis_token.bytes.decode("utf8").strip()
-                #                     != associated_token.bytes.decode("utf8").strip()
-                #                 ):
-                #                     # token was replaced by something else
-                #                     lm._display_state += f"<||_html:<s><span style='background-color: rgba(255, 0, 0, {0.15}); border-radius: 3px;' title='{vis_token.associated_token.prob}'>_||>"
-                #                     lm._display_state += associated_token.bytes.decode("utf8")
-                #                     lm._display_state += "<||_html:</span></s>_||>"
-
-                #                 if vis_token.bytes.decode("utf8") != "":
-                #                     lm._display_state += f"<||_html:<span style='background-color: rgba(0, 255, 0, {0.15}); border-radius: 3px;' title='{vis_token.associated_token.prob}'>_||>"
-                #                     lm._display_state += vis_token.bytes.decode("utf8")
-                #                     lm._display_state += "<||_html:</span>_||>"
-
-                #     lm._update_display(throttle=False)
-
-                # last_is_generated = chunk.is_generated
 
                 if len(chunk.capture_groups) > 0:
                     for k in chunk.capture_groups:
