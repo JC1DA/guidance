@@ -960,16 +960,16 @@ class Model:
 
                     lm._update_display(throttle=False)
 
-                if token_info is not None and token_info.bytes != chunk.new_bytes:
-                    # color = (255, 0, 0) if chunk.backtrack == 0 else (0, 0, 255)
-                    # visualize_data(
-                    #     lm,
-                    #     token_info.bytes.decode("utf8"),
-                    #     token_info.prob,
-                    #     color,
-                    #     True,
-                    # )
-                    visualize_node(lm, current_vis_token)
+                # if token_info is not None and token_info.bytes != chunk.new_bytes:
+                #     # color = (255, 0, 0) if chunk.backtrack == 0 else (0, 0, 255)
+                #     # visualize_data(
+                #     #     lm,
+                #     #     token_info.bytes.decode("utf8"),
+                #     #     token_info.prob,
+                #     #     color,
+                #     #     True,
+                #     # )
+                #     visualize_node(lm, current_vis_token)
 
                 # if token_info is not None and token_info.bytes != chunk.new_bytes:
                 #     # parse modified bytes from the language model, print out with strikethrough
@@ -988,11 +988,16 @@ class Model:
                     # if chunk.is_generated:
                     #     # lm += f"<||_html:<span style='background-color: rgba({165*(1-new_bytes_prob) + 0}, {165*new_bytes_prob + 0}, 0, {0.15}); border-radius: 3px;' title='{new_bytes_prob}'>_||>"
                     #     lm += f"<||_html:<span style='background-color: rgba(0, 165, 0, {0.15}); border-radius: 3px;' title='{new_bytes_prob}'>_||>"
-                    lm += new_text
+                    
+                    # lm += new_text
+
+                    # TODO: should we just append the state here instead of creating a new model object?
+                    lm._inplace_append(new_text)
+
                     # if chunk.is_generated:
                     #     lm += "<||_html:</span>_||>"
 
-                    # hack
+                    # HACK: rollback what we appended to _display_state due to _inplace_append
                     lm._display_state = lm._display_state[: -len(str(new_text))]
 
                     # num_tokens = len(self.engine.tokenizer.encode(new_text.encode("utf8")))
@@ -1000,6 +1005,8 @@ class Model:
                     #     num_tokens == lm._last_inplace_append_len
                     # ), f"{num_tokens} != {lm._last_inplace_append_len}"
 
+                    # HACK: remove any vis_tokens that were added by the last inplace_append
+                    # because tokens added in inplace_append are assumed "not_generated"
                     for _ in range(lm._last_inplace_append_len):
                         lm._vis_tokens.pop()  # number of pop depends on how many tokens in new_text
 
@@ -1009,9 +1016,12 @@ class Model:
                         None if associated_token is None else associated_token.masked_top_k
                     )
                     prob = associated_token.prob if associated_token is not None else 1.0
-                    visualize_data(lm, new_text, prob, top_k, masked_top_k, (0, 255, 0), False)
+                    
+                    # visualize_data(lm, new_text, prob, top_k, masked_top_k, (0, 255, 0), False)
 
                 lm._vis_tokens.append(current_vis_token)
+
+                visualize_node(lm, current_vis_token)
 
                 if len(chunk.capture_groups) > 0:
                     for k in chunk.capture_groups:
@@ -1062,6 +1072,8 @@ class Model:
         unreplace_model_variables(replacements)
 
         logger.debug("finish Model._run_stateless")
+
+        lm._update_display(throttle=False)
 
         return lm
 
