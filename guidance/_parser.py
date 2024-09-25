@@ -146,6 +146,7 @@ class TokenParser:
 
             for _idx, new_bytes_token in enumerate(ff_tokens):
                 if _idx > 0:
+                    # These are force-forwarded tokens
                     engine_resp_list.append(
                         EngineTokenInfo(
                             token=new_bytes_token,
@@ -157,6 +158,8 @@ class TokenParser:
                     )
                 else:
                     if engine_resp is not None:
+                        # TODO: first token may be generated but modified
+                        engine_resp.bytes = self.tokenizer.decode([new_bytes_token])
                         engine_resp_list.append(engine_resp)
                     else:
                         engine_resp_list.append(
