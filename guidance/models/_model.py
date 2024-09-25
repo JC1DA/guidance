@@ -31,7 +31,7 @@ from .._schema import (
     EngineCallResponse,
     GuidanceEngineMetrics,
     VisBytesString,
-    VisTokenInfo,
+    VisChunkInfo,
 )
 from .._utils import softmax, CaptureEvents
 from .._parser import TokenParser
@@ -454,6 +454,7 @@ class Model:
             ""  # the current bytes that represent the state of the model for visualization
         )
         self._vis_tokens: list[VisBytesString] = []  # track the tokens we want to visualize
+        self._vis_chunks: list[VisChunkInfo] = []
         self._last_inplace_append_len = 0  # track the length of the last inplace append
 
     @property
@@ -533,26 +534,52 @@ class Model:
             new_lm._event_parent = self._event_parent
 
         new_lm._vis_tokens = []
-        for item in self._vis_tokens:
-            new_lm._vis_tokens.append(
-                VisBytesString(
-                    bytes=item.bytes,
-                    is_input=item.is_input,
-                    is_generated=item.is_generated,
-                    is_backtracked=item.is_backtracked,
-                    associated_token=(
-                        item.associated_token.model_copy()
-                        if item.associated_token is not None
-                        else None
-                    ),
+
+        # for item in self._vis_tokens:
+        #     new_lm._vis_tokens.append(
+        #         VisBytesString(
+        #             bytes=item.bytes,
+        #             is_input=item.is_input,
+        #             is_generated=item.is_generated,
+        #             is_backtracked=item.is_backtracked,
+        #             associated_token=(
+        #                 item.associated_token.model_copy()
+        #                 if item.associated_token is not None
+        #                 else None
+        #             ),
+        #         )
+        #     )
+
+        new_lm._vis_chunks = []
+        for chunk_item in self._vis_chunks:
+            vis_bytes_string_list = []
+
+            for item in chunk_item.vis_bytes_string_list:
+                vis_bytes_string_list.append(
+                    VisBytesString(
+                        bytes=item.bytes,
+                        is_input=item.is_input,
+                        is_generated=item.is_generated,
+                        is_backtracked=item.is_backtracked,
+                        associated_token=(
+                            item.associated_token.model_copy()
+                            if item.associated_token is not None
+                            else None
+                        ),
+                    )
                 )
+
+            new_lm._vis_chunks.append(
+                VisChunkInfo(bytes=chunk_item.bytes, vis_bytes_string_list=vis_bytes_string_list)
             )
+
+            new_lm._vis_tokens.extend(vis_bytes_string_list)
 
         new_lm._last_inplace_append_len = self._last_inplace_append_len
 
         return new_lm
 
-    def _inplace_append(self, value, force_silent=False):
+    def _inplace_append(self, value, force_silent=False, append_to_display=True):
         """This is the base way to add content to the current LM object that is being constructed.
 
         All updates to the model state should eventually use this function.
@@ -567,30 +594,39 @@ class Model:
         if str(value):
             # update the byte state only if we have a non-empty string
             self._state += str(value)  # TODO: make _state to be bytes not a string
-            self._display_state += str(value)
+            if append_to_display:
+                self._display_state += str(value)
 
-            # compute the tokens of new value
-            # TODO: should we do this here?
-            _tokens = self.engine.tokenizer.encode(value.encode("utf8"))
-            for _token in _tokens:
-                _bytes = self.engine.tokenizer.decode([_token])
-                self._vis_tokens.append(
-                    VisBytesString(
-                        bytes=_bytes,
-                        is_input=True,
-                        is_generated=False,
-                        is_backtracked=False,
-                        associated_token=EngineTokenInfo(
-                            token=_token,
-                            prob=1.0,
+                # compute the tokens of new value
+                # TODO: should we do this here?
+                _bytes = value.encode("utf8")
+                _tokens = self.engine.tokenizer.encode(_bytes)
+                _vis_tokens = []
+                for _token in _tokens:
+                    _bytes = self.engine.tokenizer.decode([_token])
+                    _vis_tokens.append(
+                        VisBytesString(
                             bytes=_bytes,
-                            top_k=None,
-                            masked_top_k=None,
-                        ),
+                            is_input=True,
+                            is_generated=False,
+                            is_backtracked=False,
+                            associated_token=EngineTokenInfo(
+                                token=_token,
+                                prob=1.0,
+                                bytes=_bytes,
+                                top_k=None,
+                                masked_top_k=None,
+                            ),
+                        )
                     )
+
+                self._vis_chunks.append(
+                    VisChunkInfo(bytes=value, vis_bytes_string_list=_vis_tokens)
                 )
-            self._last_inplace_append_len = len(_tokens)
-            # print(value, self._last_inplace_append_len)
+                self._vis_tokens.extend(_vis_tokens)
+
+                self._last_inplace_append_len = len(_tokens)
+                # print(value, self._last_inplace_append_len)
 
         # see if we should update the display
         if not force_silent:
@@ -1006,6 +1042,8 @@ class Model:
                 #     # print("delete '" + token_info.bytes.decode("utf8") + "'")
                 #     lm._display_state += "<||_html:</span></s>_||>"
 
+                # print(chunk.new_bytes, len(token_info_list), chunk.backtrack)
+
                 if len(chunk.new_bytes) > 0:
                     generated_value += new_text
 
@@ -1021,21 +1059,29 @@ class Model:
 
                     # TODO: should we just append the state here instead of creating a new model object?
 
-                    for token_info in token_info_list:
-                        if token_info is None:
-                            continue
+                    # for token_info in token_info_list:
+                    #     if token_info is None:
+                    #         continue
 
-                        _new_text = token_info.bytes.decode("utf-8")
-                        lm._inplace_append(_new_text)
+                    #     # _new_text = token_info.engine_bytes.decode("utf-8")
+                    #     _new_text = token_info.parser_bytes.decode("utf-8")
 
-                        # HACK: rollback what we appended to _display_state due to _inplace_append
-                        lm._display_state = lm._display_state[: -len(str(_new_text))]
+                    #     lm._inplace_append(_new_text)
 
-                        # HACK: remove any vis_tokens that were added by the last inplace_append
-                        # because tokens added in inplace_append are assumed "not_generated"
-                        for _ in range(lm._last_inplace_append_len):
-                            lm._vis_tokens.pop()  # number of pop depends on how many tokens in new_text
+                    #     # HACK: rollback what we appended to _display_state due to _inplace_append
+                    #     lm._display_state = lm._display_state[: -len(str(_new_text))]
 
+                    #     # HACK: remove any vis_tokens that were added by the last inplace_append
+                    #     # because tokens added in inplace_append are assumed "not_generated"
+                    #     for _ in range(lm._last_inplace_append_len):
+                    #         lm._vis_tokens.pop()  # number of pop depends on how many tokens in new_text
+
+                    lm._inplace_append(new_text, append_to_display=False)
+                    # lm._display_state = lm._display_state[: -len(str(new_text))]
+                    # for _ in range(lm._last_inplace_append_len):
+                    #     lm._vis_tokens.pop()
+
+                _vis_node_list = []
                 for token_info_idx, token_info in enumerate(token_info_list):
                     is_generated = True
                     if token_info_idx > 0:
@@ -1051,6 +1097,16 @@ class Model:
                         associated_token=token_info,
                     )
 
+                    _vis_node_list.append(_vis_node)
+                    # lm._add_vis_node(_vis_node)
+
+                chunk_info = VisChunkInfo(
+                    bytes=chunk.new_bytes,
+                    vis_bytes_string_list=_vis_node_list,
+                )
+                self._vis_chunks.append(chunk_info)
+
+                for _vis_node in _vis_node_list:
                     lm._add_vis_node(_vis_node)
 
                 # lm._vis_tokens.append(current_vis_token)

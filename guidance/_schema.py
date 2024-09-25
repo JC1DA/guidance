@@ -41,12 +41,6 @@ class EngineTokenInfo(BaseModel):
     bytes: bytes
     top_k: Optional[list[GenToken]]
     masked_top_k: Optional[list[GenToken]]
-    ff_tokens: list[int] = []
-
-
-class VisTokenInfo(EngineTokenInfo):
-    is_generated: bool
-    is_backtracked: bool = False
 
 
 class VisBytesString(BaseModel):
@@ -55,6 +49,11 @@ class VisBytesString(BaseModel):
     is_generated: bool
     is_backtracked: bool = False
     associated_token: Optional[EngineTokenInfo] = None
+
+
+class VisChunkInfo(BaseModel):
+    bytes: bytes
+    vis_bytes_string_list: list[VisBytesString]
 
 
 # class EngineCallResponse(BaseModel):
