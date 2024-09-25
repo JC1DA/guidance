@@ -18,7 +18,7 @@ class EngineCallResponse(BaseModel):
     capture_group_log_probs: dict
     new_token_count: NonNegativeInt
     backtrack: NonNegativeInt = 0
-    token_info: Optional["EngineTokenInfo"] = None
+    token_info_list: list["EngineTokenInfo"] = []
 
 
 # class ModelToken(BaseModel):
@@ -41,6 +41,7 @@ class EngineTokenInfo(BaseModel):
     bytes: bytes
     top_k: Optional[list[GenToken]]
     masked_top_k: Optional[list[GenToken]]
+    ff_tokens: list[int] = []
 
 
 class VisTokenInfo(EngineTokenInfo):

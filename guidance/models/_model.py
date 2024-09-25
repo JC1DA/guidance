@@ -130,27 +130,38 @@ def visualize_node(_lm: "Model", node: VisBytesString):
                 False,
             )
         else:
-            if associated_token is not None and node.bytes != associated_token.bytes:
-                color = (0, 0, 255) if node.is_backtracked else (255, 0, 0)
+            # if associated_token is not None and node.bytes != associated_token.bytes:
+            #     color = (0, 0, 255) if node.is_backtracked else (255, 0, 0)
+            #     visualize_data(
+            #         _lm,
+            #         associated_token.bytes.decode("utf8"),
+            #         associated_token.prob,
+            #         top_k,
+            #         masked_top_k,
+            #         color,
+            #         True,
+            #     )
+
+            if not node.is_backtracked:
                 visualize_data(
                     _lm,
-                    associated_token.bytes.decode("utf8"),
+                    node.bytes.decode("utf8"),
                     associated_token.prob,
                     top_k,
                     masked_top_k,
-                    color,
+                    (0, 255, 0),
+                    False,
+                )
+            else:
+                visualize_data(
+                    _lm,
+                    node.bytes.decode("utf8"),
+                    associated_token.prob,
+                    top_k,
+                    masked_top_k,
+                    (0, 0, 255),
                     True,
                 )
-
-            visualize_data(
-                _lm,
-                node.bytes.decode("utf8"),
-                associated_token.prob,
-                top_k,
-                masked_top_k,
-                (0, 255, 0),
-                False,
-            )
 
 
 class Engine:
@@ -960,15 +971,7 @@ class Model:
                     continue
                 delayed_bytes = b""
 
-                token_info = chunk.token_info
-
-                current_vis_node = VisBytesString(
-                    bytes=chunk.new_bytes,
-                    is_input=False,
-                    is_generated=chunk.is_generated,
-                    is_backtracked=chunk.backtrack > 0,
-                    associated_token=token_info,
-                )
+                token_info_list = chunk.token_info_list
 
                 for backtrack_idx in range(chunk.backtrack):
                     lm._vis_tokens[-1 - backtrack_idx].is_backtracked = True
@@ -1006,9 +1009,9 @@ class Model:
                 if len(chunk.new_bytes) > 0:
                     generated_value += new_text
 
-                    new_bytes_prob = (
-                        chunk.new_bytes_prob if token_info is None else token_info.prob
-                    )
+                    # new_bytes_prob = (
+                    #     chunk.new_bytes_prob if token_info is None else token_info.prob
+                    # )
 
                     # if chunk.is_generated:
                     #     # lm += f"<||_html:<span style='background-color: rgba({165*(1-new_bytes_prob) + 0}, {165*new_bytes_prob + 0}, 0, {0.15}); border-radius: 3px;' title='{new_bytes_prob}'>_||>"
@@ -1017,34 +1020,38 @@ class Model:
                     # lm += new_text
 
                     # TODO: should we just append the state here instead of creating a new model object?
-                    lm._inplace_append(new_text)
 
-                    # if chunk.is_generated:
-                    #     lm += "<||_html:</span>_||>"
+                    for token_info in token_info_list:
+                        if token_info is None:
+                            continue
 
-                    # HACK: rollback what we appended to _display_state due to _inplace_append
-                    lm._display_state = lm._display_state[: -len(str(new_text))]
+                        _new_text = token_info.bytes.decode("utf-8")
+                        lm._inplace_append(_new_text)
 
-                    # num_tokens = len(self.engine.tokenizer.encode(new_text.encode("utf8")))
-                    # assert (
-                    #     num_tokens == lm._last_inplace_append_len
-                    # ), f"{num_tokens} != {lm._last_inplace_append_len}"
+                        # HACK: rollback what we appended to _display_state due to _inplace_append
+                        lm._display_state = lm._display_state[: -len(str(_new_text))]
 
-                    # HACK: remove any vis_tokens that were added by the last inplace_append
-                    # because tokens added in inplace_append are assumed "not_generated"
-                    for _ in range(lm._last_inplace_append_len):
-                        lm._vis_tokens.pop()  # number of pop depends on how many tokens in new_text
+                        # HACK: remove any vis_tokens that were added by the last inplace_append
+                        # because tokens added in inplace_append are assumed "not_generated"
+                        for _ in range(lm._last_inplace_append_len):
+                            lm._vis_tokens.pop()  # number of pop depends on how many tokens in new_text
 
-                    # associated_token = current_vis_token.associated_token
-                    # top_k = None if associated_token is None else associated_token.top_k
-                    # masked_top_k = (
-                    #     None if associated_token is None else associated_token.masked_top_k
-                    # )
-                    # prob = associated_token.prob if associated_token is not None else 1.0
+                for token_info_idx, token_info in enumerate(token_info_list):
+                    is_generated = True
+                    if token_info_idx > 0:
+                        is_generated = False
+                    else:
+                        is_generated = chunk.is_generated
 
-                    # visualize_data(lm, new_text, prob, top_k, masked_top_k, (0, 255, 0), False)
+                    _vis_node = VisBytesString(
+                        bytes=token_info.bytes,
+                        is_input=False,
+                        is_generated=is_generated,
+                        is_backtracked=chunk.backtrack > 0 and token_info_idx == 0,
+                        associated_token=token_info,
+                    )
 
-                lm._add_vis_node(current_vis_node)
+                    lm._add_vis_node(_vis_node)
 
                 # lm._vis_tokens.append(current_vis_token)
 

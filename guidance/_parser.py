@@ -96,27 +96,96 @@ class TokenParser:
     ]:
         tokens = self._process_prompt(prompt=prompt, ensure_bos_token=ensure_bos_token)
 
-        # print("prompt", prompt)
+        # print("new prompt", prompt)
 
         token = None
         engine_resp = None
         backtrack = 0
+        ff_tokens = []
 
         while True:
             mask, resp = self.ll_interpreter.mid_process()
             r = LLInterpreterResponse.model_validate_json(resp)
             response = r.progress.to_engine_call_response()
 
+            engine_resp_list = []
+
+            # print(len(ff_tokens), "\t", response.new_bytes)
+
+            # process special case
+            if len(response.new_bytes) > 0 and len(ff_tokens) == 0:
+                # first iteration
+                ff_tokens = self.tokenizer.encode(response.new_bytes)
+
+            # TODO: get associated token list from parser
+            # new_bytes_tokens = self.tokenizer.encode(response.new_bytes)
+            # for _idx, new_bytes_token in enumerate(new_bytes_tokens):
+            #     if _idx > 0:
+            #         engine_resp_list.append(
+            #             EngineTokenInfo(
+            #                 token=new_bytes_token,
+            #                 prob=1.0,
+            #                 bytes=self.tokenizer.decode([new_bytes_token]),
+            #                 top_k=None,
+            #                 masked_top_k=None,
+            #             )
+            #         )
+            #     else:
+            #         if engine_resp is not None:
+            #             engine_resp_list.append(engine_resp)
+            #         else:
+            #             engine_resp_list.append(
+            #                 EngineTokenInfo(
+            #                     token=new_bytes_token,
+            #                     prob=1.0,
+            #                     bytes=self.tokenizer.decode([new_bytes_token]),
+            #                     top_k=None,
+            #                     masked_top_k=None,
+            #                 )
+            #             )
+
+            for _idx, new_bytes_token in enumerate(ff_tokens):
+                if _idx > 0:
+                    engine_resp_list.append(
+                        EngineTokenInfo(
+                            token=new_bytes_token,
+                            prob=1.0,
+                            bytes=self.tokenizer.decode([new_bytes_token]),
+                            top_k=None,
+                            masked_top_k=None,
+                        )
+                    )
+                else:
+                    if engine_resp is not None:
+                        engine_resp_list.append(engine_resp)
+                    else:
+                        engine_resp_list.append(
+                            EngineTokenInfo(
+                                token=new_bytes_token,
+                                prob=1.0,
+                                bytes=self.tokenizer.decode([new_bytes_token]),
+                                top_k=None,
+                                masked_top_k=None,
+                            )
+                        )
+
             # update response
             response.backtrack = backtrack
-            response.token_info = engine_resp
+            response.token_info_list = engine_resp_list
 
-            # print(self.tokenizer.decode(tokens))
+            # print("")
+            # print("token", self.tokenizer.decode([token]) if token is not None else None)
+            # print("ff_tokens", len(ff_tokens), self.tokenizer.decode(ff_tokens))
+            # print("backtrack", backtrack)
+            # print(response.new_bytes)
+            # print(ff_tokens, "ff_tokens")
+            # print(new_bytes_tokens, "new_bytes_tokens")
             # print(
             #     backtrack,
             #     response.new_bytes,
             #     self.tokenizer.decode([token]) if token is not None else None,
             # )
+            # print("")
 
             if r.stop:
                 break
