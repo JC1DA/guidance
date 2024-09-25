@@ -603,6 +603,10 @@ class Model:
                 else:
                     self._last_display = curr_time
 
+            if self._display_state == "":
+                for vis_token in self._vis_tokens:
+                    visualize_node(self, vis_token)
+
             if ipython_is_imported:
                 clear_output(wait=True)
                 display(HTML(self._html()))
@@ -909,6 +913,10 @@ class Model:
 
     #         return self
 
+    def _add_vis_node(self, node: VisBytesString):
+        self._vis_tokens.append(node)
+        visualize_node(self, node)
+
     def _run_stateless(self, stateless_function, temperature=0.0, top_p=1.0, n=1):
         assert (
             Model._grammar_only == 0
@@ -954,7 +962,7 @@ class Model:
 
                 token_info = chunk.token_info
 
-                current_vis_token = VisBytesString(
+                current_vis_node = VisBytesString(
                     bytes=chunk.new_bytes,
                     is_input=False,
                     is_generated=chunk.is_generated,
@@ -969,11 +977,12 @@ class Model:
                     lm._display_state = ""
                     # print("backtrack started")
 
-                    for vis_token in lm._vis_tokens:
-                        visualize_node(lm, vis_token)
+                    # for vis_token in lm._vis_tokens:
+                    #     visualize_node(lm, vis_token)
 
                     # print("backtrack ended")
 
+                    # force update the display if needed as we got some tokens backtracked
                     lm._update_display(throttle=False)
 
                 # if token_info is not None and token_info.bytes != chunk.new_bytes:
@@ -1035,9 +1044,11 @@ class Model:
 
                     # visualize_data(lm, new_text, prob, top_k, masked_top_k, (0, 255, 0), False)
 
-                lm._vis_tokens.append(current_vis_token)
+                lm._add_vis_node(current_vis_node)
 
-                visualize_node(lm, current_vis_token)
+                # lm._vis_tokens.append(current_vis_token)
+
+                # visualize_node(lm, current_vis_token)
 
                 if len(chunk.capture_groups) > 0:
                     for k in chunk.capture_groups:
