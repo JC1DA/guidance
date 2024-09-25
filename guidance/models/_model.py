@@ -94,6 +94,65 @@ def visualize_data(
         _lm._display_state += "<||_html:</span>_||>"
 
 
+def visualize_node(_lm: "Model", node: VisBytesString):
+    # if node.associated_token is not None:
+    #     print(
+    #         f"'{node.bytes.decode('utf8')}'",
+    #         f"'{node.associated_token.bytes.decode('utf8')}'",
+    #     )
+    # else:
+    #     print(f"'{node.bytes.decode('utf8')}'", None)
+
+    if node is None:
+        print("Node is None")
+
+    associated_token = node.associated_token
+    top_k = None if associated_token is None else associated_token.top_k
+    masked_top_k = None if associated_token is None else associated_token.masked_top_k
+
+    if node.is_input:
+        if not node.is_backtracked:
+            _lm._display_state += node.bytes.decode("utf8")
+        else:
+            visualize_data(
+                _lm, node.bytes.decode("utf8"), 1.0, top_k, masked_top_k, (0, 0, 255), True
+            )
+    else:
+        if not node.is_generated:
+            visualize_data(
+                _lm,
+                node.bytes.decode("utf8"),
+                # associated_token.prob,
+                1.0,
+                top_k,
+                masked_top_k,
+                (127, 127, 0),
+                False,
+            )
+        else:
+            if associated_token is not None and node.bytes != associated_token.bytes:
+                color = (0, 0, 255) if node.is_backtracked else (255, 0, 0)
+                visualize_data(
+                    _lm,
+                    associated_token.bytes.decode("utf8"),
+                    associated_token.prob,
+                    top_k,
+                    masked_top_k,
+                    color,
+                    True,
+                )
+
+            visualize_data(
+                _lm,
+                node.bytes.decode("utf8"),
+                associated_token.prob,
+                top_k,
+                masked_top_k,
+                (0, 255, 0),
+                False,
+            )
+
+
 class Engine:
     """The engine owns the inference computation and is used/created by the Model class.
 
@@ -467,6 +526,7 @@ class Model:
             new_lm._vis_tokens.append(
                 VisBytesString(
                     bytes=item.bytes,
+                    is_input=item.is_input,
                     is_generated=item.is_generated,
                     is_backtracked=item.is_backtracked,
                     associated_token=(
@@ -506,6 +566,7 @@ class Model:
                 self._vis_tokens.append(
                     VisBytesString(
                         bytes=_bytes,
+                        is_input=True,
                         is_generated=False,
                         is_backtracked=False,
                         associated_token=EngineTokenInfo(
@@ -868,52 +929,6 @@ class Model:
         # we will return a new extended version of ourselves, which we track as `lm`
         lm = self
 
-        def visualize_node(_lm, node: VisBytesString):
-            # if node.associated_token is not None:
-            #     print(
-            #         f"'{node.bytes.decode('utf8')}'",
-            #         f"'{node.associated_token.bytes.decode('utf8')}'",
-            #     )
-            # else:
-            #     print(f"'{node.bytes.decode('utf8')}'", None)
-
-            associated_token = node.associated_token
-            top_k = None if associated_token is None else associated_token.top_k
-            masked_top_k = None if associated_token is None else associated_token.masked_top_k
-
-            if not node.is_generated:
-                if not node.is_backtracked:
-                    _lm._display_state += node.bytes.decode("utf8")
-                else:
-                    visualize_data(
-                        _lm, node.bytes.decode("utf8"), 1.0, top_k, masked_top_k, (0, 0, 255), True
-                    )
-            else:
-                if node.bytes != node.associated_token.bytes:
-                    color = (0, 0, 255) if node.is_backtracked else (255, 0, 0)
-                    visualize_data(
-                        _lm,
-                        node.associated_token.bytes.decode("utf8"),
-                        node.associated_token.prob,
-                        top_k,
-                        masked_top_k,
-                        color,
-                        True,
-                    )
-
-                if node.is_generated:
-                    visualize_data(
-                        _lm,
-                        node.bytes.decode("utf8"),
-                        node.associated_token.prob,
-                        top_k,
-                        masked_top_k,
-                        (0, 255, 0),
-                        False,
-                    )
-                else:
-                    _lm._display_state += node.bytes.decode("utf8")
-
         # single generation
         if n == 1:
             generated_value = ""
@@ -941,6 +956,7 @@ class Model:
 
                 current_vis_token = VisBytesString(
                     bytes=chunk.new_bytes,
+                    is_input=False,
                     is_generated=chunk.is_generated,
                     is_backtracked=chunk.backtrack > 0,
                     associated_token=token_info,
@@ -988,7 +1004,7 @@ class Model:
                     # if chunk.is_generated:
                     #     # lm += f"<||_html:<span style='background-color: rgba({165*(1-new_bytes_prob) + 0}, {165*new_bytes_prob + 0}, 0, {0.15}); border-radius: 3px;' title='{new_bytes_prob}'>_||>"
                     #     lm += f"<||_html:<span style='background-color: rgba(0, 165, 0, {0.15}); border-radius: 3px;' title='{new_bytes_prob}'>_||>"
-                    
+
                     # lm += new_text
 
                     # TODO: should we just append the state here instead of creating a new model object?
@@ -1010,13 +1026,13 @@ class Model:
                     for _ in range(lm._last_inplace_append_len):
                         lm._vis_tokens.pop()  # number of pop depends on how many tokens in new_text
 
-                    associated_token = current_vis_token.associated_token
-                    top_k = None if associated_token is None else associated_token.top_k
-                    masked_top_k = (
-                        None if associated_token is None else associated_token.masked_top_k
-                    )
-                    prob = associated_token.prob if associated_token is not None else 1.0
-                    
+                    # associated_token = current_vis_token.associated_token
+                    # top_k = None if associated_token is None else associated_token.top_k
+                    # masked_top_k = (
+                    #     None if associated_token is None else associated_token.masked_top_k
+                    # )
+                    # prob = associated_token.prob if associated_token is not None else 1.0
+
                     # visualize_data(lm, new_text, prob, top_k, masked_top_k, (0, 255, 0), False)
 
                 lm._vis_tokens.append(current_vis_token)

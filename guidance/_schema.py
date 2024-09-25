@@ -50,6 +50,7 @@ class VisTokenInfo(EngineTokenInfo):
 
 class VisBytesString(BaseModel):
     bytes: bytes
+    is_input: bool
     is_generated: bool
     is_backtracked: bool = False
     associated_token: Optional[EngineTokenInfo] = None
