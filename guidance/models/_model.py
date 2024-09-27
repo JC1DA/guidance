@@ -573,7 +573,11 @@ class Model:
                 )
 
             new_lm._vis_chunks.append(
-                VisChunkInfo(bytes=chunk_item.bytes, vis_bytes_string_list=vis_bytes_string_list)
+                VisChunkInfo(
+                    bytes=chunk_item.bytes,
+                    is_generated=chunk_item.is_generated,
+                    vis_bytes_string_list=vis_bytes_string_list,
+                )
             )
 
             new_lm._vis_tokens.extend(vis_bytes_string_list)
@@ -624,7 +628,9 @@ class Model:
                     )
 
                 self._vis_chunks.append(
-                    VisChunkInfo(bytes=value, vis_bytes_string_list=_vis_tokens)
+                    VisChunkInfo(
+                        bytes=value, is_generated=False, vis_bytes_string_list=_vis_tokens
+                    )
                 )
                 self._vis_tokens.extend(_vis_tokens)
 
@@ -1143,6 +1149,7 @@ class Model:
 
                 chunk_info = VisChunkInfo(
                     bytes=chunk.new_bytes,
+                    is_generated=chunk.is_generated,
                     vis_bytes_string_list=_vis_node_list,
                 )
                 self._vis_chunks.append(chunk_info)

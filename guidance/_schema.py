@@ -53,6 +53,7 @@ class VisBytesString(BaseModel):
 
 class VisChunkInfo(BaseModel):
     bytes: bytes
+    is_generated: bool
     vis_bytes_string_list: list[VisBytesString]
 
 
