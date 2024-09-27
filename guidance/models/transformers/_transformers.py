@@ -440,9 +440,14 @@ class TransformersEngine(Engine):
 
     def get_token_probs(self, texts: list[str], top_k: int = 5) -> list[list[dict]]:
         tokenizer = self.tokenizer._orig_tokenizer
-        input_ids = tokenizer(texts, padding=True, return_tensors="pt").input_ids.to(
-            self.model_obj.device
-        )
+
+        # input_ids = tokenizer(texts, padding=True, return_tensors="pt").input_ids.to(
+        #     self.model_obj.device
+        # )
+
+        # HACK - assume batch size of 1
+        token_ids = self.tokenizer.encode(texts[0].encode("utf-8"))
+        input_ids = torch.tensor(token_ids).unsqueeze(0).to(self.device)
 
         outputs = self.model_obj(input_ids)
         probs = torch.softmax(outputs.logits, dim=-1).detach()

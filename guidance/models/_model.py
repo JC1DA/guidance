@@ -674,30 +674,46 @@ class Model:
                     chunk_idx += 1
                     _chunk += self._vis_chunks[chunk_idx].bytes.decode("utf8")
 
-                print("chunk ", chunk_idx, len(self._vis_chunks))
-                print("start")
-                print(f"'{_chunk}'", "|", f"'{token}'")
-                print(len(_chunk), "|", len(token))
-                print(len(_chunk.strip()), "|", len(token))
-                print("end")
+                # print("chunk ", chunk_idx, len(self._vis_chunks))
+                # print("start")
+                # print(f"'{_chunk}'", "|", f"'{token}'")
+                # print(len(_chunk), "|", len(token))
+                # print(len(_chunk.strip()), "|", len(token))
+                # print("end")
 
                 assert _chunk.startswith(token), f"{_chunk} must start with {token}"
 
                 current_vis_chunk = self._vis_chunks[chunk_idx]
 
                 is_input = False
+                is_generated = False
                 if len(current_vis_chunk.vis_bytes_string_list) == 0:
                     is_input = True
-                elif not current_vis_chunk.vis_bytes_string_list[-1].is_generated:
+                elif current_vis_chunk.vis_bytes_string_list[-1].is_input:
                     is_input = True
+                elif current_vis_chunk.vis_bytes_string_list[-1].is_generated:
+                    is_generated = True
 
                 if is_input:
                     color = (127, 127, 127)
+                elif not is_generated:
+                    color = (255, 255, 0)
                 else:
                     color = (0, 255, 0)
 
+                _top_k = []
+                for _token in token_probs["top_k"]:
+                    info = token_probs["top_k"][_token]
+                    _top_k.append(
+                        GenToken(
+                            token=info["token_id"],
+                            prob=info["prob"],
+                            bytes=_token.encode("utf-8"),
+                        )
+                    )
+
                 visualize_data(
-                    self, token, token_probs["top_k"][token]["prob"], [], [], color, False
+                    self, token, token_probs["top_k"][token]["prob"], _top_k, [], color, False
                 )
 
                 _chunk = _chunk[len(token) :]
