@@ -685,14 +685,28 @@ class Model:
 
                 current_vis_chunk = self._vis_chunks[chunk_idx]
 
-                is_input = False
-                is_generated = False
-                if len(current_vis_chunk.vis_bytes_string_list) == 0:
-                    is_input = True
-                elif current_vis_chunk.vis_bytes_string_list[-1].is_input:
-                    is_input = True
-                elif current_vis_chunk.vis_bytes_string_list[-1].is_generated:
-                    is_generated = True
+                is_generated_list = [
+                    item.is_generated for item in current_vis_chunk.vis_bytes_string_list
+                ]
+                is_generated_list = list(set(is_generated_list))
+
+                if len(is_generated_list) <= 1:
+                    is_input = False
+                    is_generated = False
+                    if len(current_vis_chunk.vis_bytes_string_list) == 0:
+                        is_input = True
+                    elif current_vis_chunk.vis_bytes_string_list[-1].is_input:
+                        is_input = True
+                    elif current_vis_chunk.vis_bytes_string_list[-1].is_generated:
+                        is_generated = True
+                else:
+                    # try to find the best fit
+                    # TODO: find a better way to do this
+                    for vis_byte_string in current_vis_chunk.vis_bytes_string_list:
+                        if vis_byte_string.bytes.decode("utf8").strip() in token:
+                            is_input = vis_byte_string.is_input
+                            is_generated = vis_byte_string.is_generated
+                            break
 
                 if is_input:
                     color = (127, 127, 127)
