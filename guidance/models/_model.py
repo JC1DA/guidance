@@ -364,6 +364,9 @@ class Engine:
         token = self.sample_with_temperature(logits, mask, temperature)
         return token
 
+    def get_token_probs(self, texts: list[str], top_k: int = 5) -> list[list[dict]]:
+        raise NotImplementedError
+
     def get_logits(self, token_ids: list[int]) -> np.ndarray:
         raise NotImplementedError
 
@@ -650,9 +653,54 @@ class Model:
                 else:
                     self._last_display = curr_time
 
-            if self._display_state == "":
-                for vis_token in self._vis_tokens:
-                    visualize_node(self, vis_token)
+            # if self._display_state == "":
+            #     for vis_token in self._vis_tokens:
+            #         visualize_node(self, vis_token)
+
+            self._display_state = ""
+            tokens_probs = self.engine.get_token_probs([self._state], top_k=5)[0]
+            chunk_idx = 0
+
+            _chunk = self._vis_chunks[chunk_idx].bytes.decode("utf8")
+            for token_probs in tokens_probs:
+                # print(token_probs)
+                token = token_probs["token"]
+
+                while len(_chunk) < len(token) and chunk_idx + 1 < len(self._vis_chunks):
+                    chunk_idx += 1
+                    _chunk += self._vis_chunks[chunk_idx].bytes.decode("utf8")
+
+                while len(_chunk.strip()) == 0 and chunk_idx + 1 < len(self._vis_chunks):
+                    chunk_idx += 1
+                    _chunk += self._vis_chunks[chunk_idx].bytes.decode("utf8")
+
+                print("chunk ", chunk_idx, len(self._vis_chunks))
+                print("start")
+                print(f"'{_chunk}'", "|", f"'{token}'")
+                print(len(_chunk), "|", len(token))
+                print(len(_chunk.strip()), "|", len(token))
+                print("end")
+
+                assert _chunk.startswith(token), f"{_chunk} must start with {token}"
+
+                current_vis_chunk = self._vis_chunks[chunk_idx]
+
+                is_input = False
+                if len(current_vis_chunk.vis_bytes_string_list) == 0:
+                    is_input = True
+                elif not current_vis_chunk.vis_bytes_string_list[-1].is_generated:
+                    is_input = True
+
+                if is_input:
+                    color = (127, 127, 127)
+                else:
+                    color = (0, 255, 0)
+
+                visualize_data(
+                    self, token, token_probs["top_k"][token]["prob"], [], [], color, False
+                )
+
+                _chunk = _chunk[len(token) :]
 
             if ipython_is_imported:
                 clear_output(wait=True)
@@ -962,7 +1010,7 @@ class Model:
 
     def _add_vis_node(self, node: VisBytesString):
         self._vis_tokens.append(node)
-        visualize_node(self, node)
+        # visualize_node(self, node)
 
     def _run_stateless(self, stateless_function, temperature=0.0, top_p=1.0, n=1):
         assert (
@@ -1044,6 +1092,34 @@ class Model:
 
                 # print(chunk.new_bytes, len(token_info_list), chunk.backtrack)
 
+                _vis_node_list = []
+                for token_info_idx, token_info in enumerate(token_info_list):
+                    is_generated = True
+                    if token_info_idx > 0:
+                        is_generated = False
+                    else:
+                        is_generated = chunk.is_generated
+
+                    _vis_node = VisBytesString(
+                        bytes=token_info.bytes,
+                        is_input=False,
+                        is_generated=is_generated,
+                        is_backtracked=chunk.backtrack > 0 and token_info_idx == 0,
+                        associated_token=token_info,
+                    )
+
+                    _vis_node_list.append(_vis_node)
+                    # lm._add_vis_node(_vis_node)
+
+                chunk_info = VisChunkInfo(
+                    bytes=chunk.new_bytes,
+                    vis_bytes_string_list=_vis_node_list,
+                )
+                self._vis_chunks.append(chunk_info)
+
+                for _vis_node in _vis_node_list:
+                    lm._add_vis_node(_vis_node)
+
                 if len(chunk.new_bytes) > 0:
                     generated_value += new_text
 
@@ -1080,34 +1156,6 @@ class Model:
                     # lm._display_state = lm._display_state[: -len(str(new_text))]
                     # for _ in range(lm._last_inplace_append_len):
                     #     lm._vis_tokens.pop()
-
-                _vis_node_list = []
-                for token_info_idx, token_info in enumerate(token_info_list):
-                    is_generated = True
-                    if token_info_idx > 0:
-                        is_generated = False
-                    else:
-                        is_generated = chunk.is_generated
-
-                    _vis_node = VisBytesString(
-                        bytes=token_info.bytes,
-                        is_input=False,
-                        is_generated=is_generated,
-                        is_backtracked=chunk.backtrack > 0 and token_info_idx == 0,
-                        associated_token=token_info,
-                    )
-
-                    _vis_node_list.append(_vis_node)
-                    # lm._add_vis_node(_vis_node)
-
-                chunk_info = VisChunkInfo(
-                    bytes=chunk.new_bytes,
-                    vis_bytes_string_list=_vis_node_list,
-                )
-                self._vis_chunks.append(chunk_info)
-
-                for _vis_node in _vis_node_list:
-                    lm._add_vis_node(_vis_node)
 
                 # lm._vis_tokens.append(current_vis_token)
 
