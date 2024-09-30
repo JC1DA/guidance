@@ -82,9 +82,9 @@ def visualize_data(
     _masked_top_k = json.dumps(_masked_top_k)
 
     if use_strickthrough:
-        _lm._display_state += f"<||_html:<s><span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob:.3f}\ntop_k:{_top_k}\nmasked_top_k:{_masked_top_k}'>_||>"
+        _lm._display_state += f"<||_html:<s><span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{text} : {prob:.3f}\ntop_k:{_top_k}\nmasked_top_k:{_masked_top_k}'>_||>"
     else:
-        _lm._display_state += f"<||_html:<span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{prob:.3f}\ntop_k:{_top_k}\nmasked_top_k:{_masked_top_k}'>_||>"
+        _lm._display_state += f"<||_html:<span style='background-color: rgba({rbg[0]}, {rbg[1]}, {rbg[2]}, {0.15}); border-radius: 3px;' title='{text} : {prob:.3f}\ntop_k:{_top_k}\nmasked_top_k:{_masked_top_k}'>_||>"
 
     _lm._display_state += text
 
@@ -659,9 +659,9 @@ class Model:
                 else:
                     self._last_display = curr_time
 
-            # if self._display_state == "":
-            #     for vis_token in self._vis_tokens:
-            #         visualize_node(self, vis_token)
+            if self._display_state == "":
+                for vis_token in self._vis_tokens:
+                    visualize_node(self, vis_token)
 
             self._display_state = ""
             tokens_probs = self.engine.get_token_probs([self._state], top_k=5)[0]
