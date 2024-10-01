@@ -44,9 +44,7 @@ class TokenParser:
             serialized_grammar = grammar
 
         self.tokenizer = tokenizer
-        self.ll_tokenizer = llguidance.LLTokenizer(
-            llguidance.TokenizerWrapper(tokenizer)
-        )
+        self.ll_tokenizer = llguidance.LLTokenizer(llguidance.TokenizerWrapper(tokenizer))
         self.ll_interpreter = llguidance.LLInterpreter(
             self.ll_tokenizer,
             serialized_grammar,
@@ -71,9 +69,7 @@ class TokenParser:
             return None, e.value
 
     def _process_prompt(self, prompt: bytes, ensure_bos_token: bool) -> list[int]:
-        prompt_tokens = self.ll_interpreter.process_prompt(
-            self.tokenizer.encode(prompt)
-        )
+        prompt_tokens = self.ll_interpreter.process_prompt(self.tokenizer.encode(prompt))
         if (
             ensure_bos_token
             and self.tokenizer.bos_token is not None
@@ -84,16 +80,18 @@ class TokenParser:
 
         return self.tokenizer.recode(prompt_tokens)
 
-
     def _parse(
         self,
         prompt: bytes,
         ensure_bos_token: bool,
-    ) -> Generator[Tuple[Optional[GenData], EngineCallResponse], Optional[EngineOutput], EngineCallResponse]:
+    ) -> Generator[
+        Tuple[Optional[GenData], EngineCallResponse], Optional[EngineOutput], EngineCallResponse
+    ]:
         tokens = self._process_prompt(prompt=prompt, ensure_bos_token=ensure_bos_token)
 
         engine_output: EngineOutput = None
         ff_tokens = []
+        backtrack = 0
 
         while True:
             mask, resp = self.ll_interpreter.mid_process()
@@ -116,11 +114,11 @@ class TokenParser:
                                 prob=1.0,
                                 bytes=new_token_bytes,
                                 latency_ms=0,
-                                is_generated=False
+                                is_generated=False,
                             ),
                             top_k=None,
                             masked_top_k=None,
-                            is_backtracked=False
+                            is_backtracked=False,
                         )
                     )
                 else:
@@ -135,14 +133,15 @@ class TokenParser:
                                     prob=1.0,
                                     bytes=new_token_bytes,
                                     latency_ms=0,
-                                    is_generated=False
+                                    is_generated=False,
                                 ),
                                 top_k=None,
                                 masked_top_k=None,
-                                is_backtracked=False
+                                is_backtracked=False,
                             )
                         )
             response.engine_outputs = engine_outputs
+            response.backtrack = backtrack
 
             if r.stop:
                 break
@@ -161,17 +160,22 @@ class TokenParser:
                 if not mask[engine_output.issued_token.token]:
                     # Note: we could punt this probem to ll_interpreter.post_process,
                     # but it's a bit clearer to handle it here
-                    raise InvalidTokenException(engine_output.issued_token.token, gen_data.valid_next_tokens, tokens)
+                    raise InvalidTokenException(
+                        engine_output.issued_token.token, gen_data.valid_next_tokens, tokens
+                    )
             else:
                 gen_data = None
                 engine_output = yield (gen_data, response)
                 if engine_output.issued_token.token is not None:
-                    raise TokenParserException(f"Expected None, got token {engine_output.issued_token.token}")
+                    raise TokenParserException(
+                        f"Expected None, got token {engine_output.issued_token.token}"
+                    )
 
-            backtrack, ff_tokens = self.ll_interpreter.post_process(engine_output.issued_token.token)
+            backtrack, ff_tokens = self.ll_interpreter.post_process(
+                engine_output.issued_token.token
+            )
             if backtrack:
                 tokens = tokens[:-backtrack]
-                response.backtrack = backtrack
             tokens = tokens + ff_tokens
 
         stop_reason = self.ll_interpreter.stop_reason()
@@ -217,9 +221,7 @@ class ByteParser:
         if self.gen_data is None:
             return set()
         return {
-            bytes([t])
-            for t in self.gen_data.valid_next_tokens
-            if t != self.tokenizer.eos_token_id
+            bytes([t]) for t in self.gen_data.valid_next_tokens if t != self.tokenizer.eos_token_id
         }
 
     def next_byte_mask(self) -> NDArray[np.uint8]:
@@ -310,23 +312,15 @@ class ByteParser:
                     # convert to a string if possible
                     # TODO: will need to not just always do this once we support images etc.
                     try:
-                        inner_v = (
-                            inner_v.decode("utf8")
-                            if isinstance(inner_v, bytes)
-                            else inner_v
-                        )
+                        inner_v = inner_v.decode("utf8") if isinstance(inner_v, bytes) else inner_v
                     except UnicodeDecodeError:
                         pass
 
-                    if k not in self._variables or not isinstance(
-                        self._variables[k], list
-                    ):
+                    if k not in self._variables or not isinstance(self._variables[k], list):
                         self._variables[k] = []
                         self._variables_log_probs[k] = []
                     self._variables[k].append(inner_v)
-                    self._variables_log_probs[k].append(
-                        response.capture_group_log_probs[k][i]
-                    )
+                    self._variables_log_probs[k].append(response.capture_group_log_probs[k][i])
 
             # ...or standard assignment mode
             else:

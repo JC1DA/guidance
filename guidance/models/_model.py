@@ -10,8 +10,18 @@ from typing import Iterator, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from ..trace import NodeAttr, StatelessGuidanceInput, StatefulGuidanceInput, LiteralInput, EmbeddedInput, \
-    RoleOpenerInput, RoleCloserInput, TextOutput, CaptureOutput, TraceHandler
+from ..trace import (
+    NodeAttr,
+    StatelessGuidanceInput,
+    StatefulGuidanceInput,
+    LiteralInput,
+    EmbeddedInput,
+    RoleOpenerInput,
+    RoleCloserInput,
+    TextOutput,
+    CaptureOutput,
+    TraceHandler,
+)
 from ..visual import TraceMessage, AutoRenderer, trace_node_to_str, trace_node_to_html
 
 try:
@@ -23,7 +33,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-from .._schema import EngineCallResponse, EngineOutput, GenToken, GuidanceEngineMetrics, VisBytesChunk
+from .._schema import (
+    EngineCallResponse,
+    EngineOutput,
+    GenToken,
+    GuidanceEngineMetrics,
+    VisBytesChunk,
+)
 from .._utils import softmax, CaptureEvents
 from .._parser import TokenParser
 from .._grammar import (
@@ -68,9 +84,13 @@ class Engine:
         self.trace_handler = TraceHandler()
         self.renderer = AutoRenderer(self.trace_handler)
 
-    def get_chat_template(self): # TODO [HN]: Add more logic here...should we instantiate class here? do we even need to?
-        return self.tokenizer.chat_template() # Instantiate the class before returning to client for now
-    
+    def get_chat_template(
+        self,
+    ):  # TODO [HN]: Add more logic here...should we instantiate class here? do we even need to?
+        return (
+            self.tokenizer.chat_template()
+        )  # Instantiate the class before returning to client for now
+
     def reset_metrics(self):
         self.metrics = GuidanceEngineMetrics()
 
@@ -113,7 +133,7 @@ class Engine:
             grammar=grammar,
             tokenizer=self.tokenizer,
             prompt=prompt,
-            ensure_bos_token=ensure_bos_token
+            ensure_bos_token=ensure_bos_token,
         )
 
     def __call__(self, prompt, grammar, ensure_bos_token=True) -> Iterator[EngineCallResponse]:
@@ -177,7 +197,9 @@ class Engine:
 
                 if is_in_accepting_state and not gen_data.mask[engine_output.issued_token.token]:
                     engine_output.issued_token.token = self.tokenizer.eos_token_id
-                    engine_output.issued_token.bytes = self.tokenizer.decode([engine_output.issued_token.token])
+                    engine_output.issued_token.bytes = self.tokenizer.decode(
+                        [engine_output.issued_token.token]
+                    )
                     # TODO: Should we set the prob to 1.0 here?
                     engine_output.issued_token.prob = 1.0
             else:
@@ -205,9 +227,10 @@ class Engine:
                     prob=prob,
                     bytes=self.tokenizer.decode([token]),
                     latency_ms=lat_ms,
-                    is_generated=True
+                    is_generated=True,
                 )
-                for token, prob in zip(top_k_indices, top_k_probs) if prob > 0
+                for token, prob in zip(top_k_indices, top_k_probs)
+                if prob > 0
             ]
 
         # compute top-k without masking
@@ -234,7 +257,9 @@ class Engine:
             is_backtracked=False,
         )
 
-    def get_next_token(self, token_ids: list[int], mask: Optional[bytes], temperature: float) -> int:
+    def get_next_token(
+        self, token_ids: list[int], mask: Optional[bytes], temperature: float
+    ) -> int:
         """Base implementation for getting the next token from the model which calls get_logits and sample_with_temperature.
         Subclasses may override this method, e.g. if they use external APIs that do not support getting logits directly.
         """
@@ -245,13 +270,15 @@ class Engine:
     def get_logits(self, token_ids: list[int]) -> np.ndarray:
         raise NotImplementedError
 
-    def sample_with_temperature(self, logits: np.ndarray, mask: Optional[bytes], temperature: float) -> int:
+    def sample_with_temperature(
+        self, logits: np.ndarray, mask: Optional[bytes], temperature: float
+    ) -> int:
         if mask is not None:
             logits += np.frombuffer(mask, dtype=np.uint8)
         if temperature < 0.0001:
             return int(np.argmax(logits))
         # Get probabilities from softmax
-        probabilities = softmax(logits/temperature)
+        probabilities = softmax(logits / temperature)
         # Sample an index based on the probabilities
         sampled_index = np.random.choice(len(logits), p=probabilities)
         return sampled_index
@@ -265,6 +292,8 @@ class Engine:
 
 
 _id_counter = 0  # Counter for identifiers, this has to be outside the model to handle child classes properly.
+
+
 class Model:
     """The base guidance model object, which represents a model in a given state.
 
@@ -276,7 +305,9 @@ class Model:
     .. automethod:: __add__
     """
 
-    global_active_blocks: list["ContextBlock"] = []  # track what context blocks are globally active
+    global_active_blocks: list["ContextBlock"] = (
+        []
+    )  # track what context blocks are globally active
 
     _grammar_only = 0  # a flag that tracks when we are forced to be executing only compiled grammars (like when we are inside a select)
 
@@ -304,11 +335,15 @@ class Model:
         #     tokenizer = Tokenizer(tokenizer)
 
         self.engine = engine
-        self.chat_template = engine.get_chat_template() # TODO [HN]: Should this be a method or attr?
+        self.chat_template = (
+            engine.get_chat_template()
+        )  # TODO [HN]: Should this be a method or attr?
         # NOTE(nopdive): `echo` seems to be better on the engine, when is there an opportunity to turn echo off midway?
         self.echo = echo
         self.token_count = 0  # tracks how many tokens our byte state represents
-        self.max_display_rate = 0.2  # this controls how frequently we are allowed to redraw the display (in seconds)
+        self.max_display_rate = (
+            0.2  # this controls how frequently we are allowed to redraw the display (in seconds)
+        )
         self.opened_blocks = {}  # what context blocks have been opened but not closed
         # self.compute_log_probs = compute_log_probs
 
@@ -322,16 +357,20 @@ class Model:
             self._renderer = engine.renderer  # renderer for display
         else:
             self._renderer = None  # no renderer if echo is false
-        self._event_queue = None  # TODO: these are for streaming results in code, but that needs implemented
+        self._event_queue = (
+            None  # TODO: these are for streaming results in code, but that needs implemented
+        )
         self._event_parent = None
         self._last_display = 0  # used to track the last display call to enable throttling
-        self._last_event_stream = 0  # used to track the last event streaming call to enable throttling
+        self._last_event_stream = (
+            0  # used to track the last event streaming call to enable throttling
+        )
 
         self._id = self.__class__.gen_id()  # model id needed for tracking state
         self._parent_id = parent_id
         self._update_trace_node(self._id, self._parent_id, None)
 
-        self.vis_bytes_chunks: list[VisBytesChunk] = [] # store chunks data for visualization
+        self.vis_bytes_chunks: list[VisBytesChunk] = []  # store chunks data for visualization
         self._last_inplace_append_len = 0
 
     @classmethod
@@ -364,8 +403,7 @@ class Model:
         """Generate HTML that displays the model object."""
 
         return trace_node_to_html(
-            self._trace_handler.id_node_map[self._id],
-            hasattr(self, "indent_roles")
+            self._trace_handler.id_node_map[self._id], hasattr(self, "indent_roles")
         )
 
     def _send_to_event_queue(self, value):
@@ -392,7 +430,9 @@ class Model:
         new_lm.opened_blocks = self.opened_blocks.copy()
 
         # create a new clean event queue
-        new_lm._event_queue = None  # we start with no event queue because nobody is listening to us yet
+        new_lm._event_queue = (
+            None  # we start with no event queue because nobody is listening to us yet
+        )
 
         if self._event_queue is not None:
             # if the current lm has an event queue, we make it our parent
@@ -435,16 +475,12 @@ class Model:
         v = value
         if not isinstance(v, str):
             v = str(value)
-            
+
         if self.echo and append_vis_chunk and len(v) > 0:
             # NOTE: only for visualization
             _bytes = value.encode("utf8")
 
-            vis_chunk = VisBytesChunk(
-                bytes=_bytes,
-                is_generated=False,
-                engine_outputs=[]
-            )
+            vis_chunk = VisBytesChunk(bytes=_bytes, is_generated=False, engine_outputs=[])
 
             # calculat tokens from input in case of token healing
             _tokens = self.engine.tokenizer.encode(_bytes)
@@ -457,11 +493,11 @@ class Model:
                             prob=1.0,
                             bytes=_bytes,
                             latency_ms=0.0,
-                            is_generated=False
+                            is_generated=False,
                         ),
                         top_k=[],
                         masked_top_k=[],
-                        is_backtracked=False
+                        is_backtracked=False,
                     )
                 )
 
@@ -472,7 +508,6 @@ class Model:
 
         # this is for programmatic streaming among other things
         self._send_to_event_queue(self)
-
 
     def reset(self, clear_variables=True):
         """This resets the state of the model object.
@@ -490,7 +525,6 @@ class Model:
             self._variables_log_probs = {}
         return self
 
-
     def role_opener(self, role_name, **kwargs):
         # TODO [HN]: Temporary change while I instrument chat_template in transformers only.
         # Eventually have all models use chat_template.
@@ -502,7 +536,6 @@ class Model:
             raise Exception(
                 f"You need to use a chat model in order the use role blocks like `with {role_name}():`! Perhaps you meant to use the {type(lm).__name__}Chat class?"
             )
-
 
     def role_closer(self, role_name, **kwargs):
         # TODO [HN]: Temporary change while I instrument chat_template in transformers only.
@@ -516,7 +549,6 @@ class Model:
                 f"You need to use a chat model in order the use role blocks like `with {role_name}():`! Perhaps you meant to use the {type(lm).__name__}Chat class?"
             )
 
-
     def _repr_html_(self):
         if ipython_is_imported:
             clear_output(wait=True)
@@ -526,7 +558,9 @@ class Model:
         """The current prompt in bytes (which is the state without the context close tags)."""
         return trace_node_to_str(self._trace_handler.id_node_map[self._id])
 
-    def _update_trace_node(self, identifier: int, parent_id: Optional[int], node_attr: Optional[NodeAttr]):
+    def _update_trace_node(
+        self, identifier: int, parent_id: Optional[int], node_attr: Optional[NodeAttr]
+    ):
         """Updates trace node that corresponds to this model."""
 
         trace_node = self._trace_handler.update_node(identifier, parent_id, node_attr)
@@ -540,13 +574,11 @@ class Model:
                 )
             )
 
-
     def __str__(self):
         """A string representation of the current model object (that includes context closers)."""
 
         # TODO(nopdive): Ensure context closers or no?
         return trace_node_to_str(self._trace_handler.id_node_map[self._id])
-
 
     def __add__(self, value):
         """Adding is the primary mechanism for extending model state.
@@ -584,7 +616,9 @@ class Model:
                 # TODO(nopdive): Replace with trace traversal.
                 v = format_pattern.sub("", lm._state[pos:])
                 lm._variables[context.name] = v
-                self._update_trace_node(lm._id, lm._parent_id, CaptureOutput(name=context.name, value=v))
+                self._update_trace_node(
+                    lm._id, lm._parent_id, CaptureOutput(name=context.name, value=v)
+                )
 
             # add closer
             self._update_trace_node(lm._id, lm._parent_id, RoleCloserInput(name=context.name))
@@ -703,9 +737,7 @@ class Model:
         else:
             for context in list(reversed(self.opened_blocks)):
                 if context.name == key:
-                    return format_pattern.sub(
-                        "", self._state[self.opened_blocks[context][0] :]
-                    )
+                    return format_pattern.sub("", self._state[self.opened_blocks[context][0] :])
 
         raise KeyError(f"Model does not contain the variable '{key}'")
 
@@ -868,6 +900,8 @@ class Model:
             # last_is_generated = False
             for chunk in gen_obj:
 
+                print("new_chunk", chunk.new_bytes)
+
                 # we make everything full probability if we are not computing uncertainty
                 # if not self.engine.compute_log_probs:
                 #     chunk.new_bytes_prob = 1.0
@@ -899,6 +933,10 @@ class Model:
 
                         backtrack_count += 1
 
+                    # last generated token is also backtracked
+                    if len(chunk.engine_outputs) > 0:
+                        chunk.engine_outputs[-1].is_backtracked = True
+
                 if len(chunk.new_bytes) > 0:
                     generated_value += new_text
 
@@ -911,11 +949,13 @@ class Model:
 
                     lm.vis_bytes_chunks.pop()
 
-                self.vis_bytes_chunks.append(VisBytesChunk(
-                    bytes=chunk.new_bytes,
-                    is_generated=chunk.is_generated,
-                    engine_outputs=chunk.engine_outputs
-                ))
+                lm.vis_bytes_chunks.append(
+                    VisBytesChunk(
+                        bytes=chunk.new_bytes,
+                        is_generated=chunk.is_generated,
+                        engine_outputs=chunk.engine_outputs,
+                    )
+                )
 
                 # last_is_generated = chunk.is_generated
                 if len(chunk.capture_groups) > 0:
@@ -939,7 +979,9 @@ class Model:
                                 if k not in lm or not isinstance(lm._variables[k], list):
                                     lm._variables[k] = []
                                     lm += CaptureOutput(name=k)
-                                if k not in lm._variables_log_probs or not isinstance(lm._variables_log_probs[k], list):
+                                if k not in lm._variables_log_probs or not isinstance(
+                                    lm._variables_log_probs[k], list
+                                ):
                                     lm._variables_log_probs[k] = []
 
                                 lm._variables[k].append(inner_v)
@@ -1061,10 +1103,7 @@ class Chat(Model):
             This kwargs are added to the role start as arguments.
         """
         return (
-            "<|im_start|>"
-            + role_name
-            + "".join([f' {k}="{v}"' for k, v in kwargs.items()])
-            + "\n"
+            "<|im_start|>" + role_name + "".join([f' {k}="{v}"' for k, v in kwargs.items()]) + "\n"
         )
 
     def get_role_end(self, role_name=None):
