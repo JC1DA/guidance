@@ -3,6 +3,7 @@ import logging
 import queue
 import re
 import threading
+import time
 
 from typing import Iterator, Optional, TYPE_CHECKING
 
@@ -22,7 +23,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-from .._schema import EngineCallResponse, GuidanceEngineMetrics
+from .._schema import EngineCallResponse, EngineOutput, GenToken, GuidanceEngineMetrics, VisBytesChunk
 from .._utils import softmax, CaptureEvents
 from .._parser import TokenParser
 from .._grammar import (
@@ -132,32 +133,106 @@ class Engine:
         """
         parser = self.start(prompt, grammar, ensure_bos_token)
 
-        token = None
+        engine_output = None
         while not parser.done():
-            gen_data, response = parser.advance(token)
+            t0 = time.time()
+
+            gen_data, response = parser.advance(engine_output)
 
             if gen_data is not None:
-                if parser.is_accepting() and self.tokenizer.eos_token_id is not None:
+                # if parser.is_accepting() and self.tokenizer.eos_token_id is not None:
+                #     # Whenever we are in an accepting state, we will allow the model to generate whatever it wants
+                #     # but we will treat any "illegal" tokens as EOS, allowing the model to finish gracefully.
+                #     assert gen_data.mask[self.tokenizer.eos_token_id]
+                #     token = self.get_next_token(
+                #         token_ids=gen_data.tokens,
+                #         mask=None,
+                #         temperature=gen_data.temperature
+                #     )
+                #     if not gen_data.mask[token]:
+                #         token = self.tokenizer.eos_token_id
+                # else:
+                #     token = self.get_next_token(
+                #         token_ids=gen_data.tokens,
+                #         mask=gen_data.mask,
+                #         temperature=gen_data.temperature
+                #     )
+
+                is_in_accepting_state = (
+                    parser.is_accepting() and self.tokenizer.eos_token_id is not None
+                )
+
+                mask = None
+                if is_in_accepting_state:
                     # Whenever we are in an accepting state, we will allow the model to generate whatever it wants
                     # but we will treat any "illegal" tokens as EOS, allowing the model to finish gracefully.
+                    # Hence, mask must be None
                     assert gen_data.mask[self.tokenizer.eos_token_id]
-                    token = self.get_next_token(
-                        token_ids=gen_data.tokens,
-                        mask=None,
-                        temperature=gen_data.temperature
-                    )
-                    if not gen_data.mask[token]:
-                        token = self.tokenizer.eos_token_id
                 else:
-                    token = self.get_next_token(
-                        token_ids=gen_data.tokens,
-                        mask=gen_data.mask,
-                        temperature=gen_data.temperature
-                    )
+                    mask = gen_data.mask
+
+                engine_output = self.get_next_top_k_tokens(
+                    token_ids=gen_data.tokens, mask=mask, temperature=gen_data.temperature
+                )
+
+                if is_in_accepting_state and not gen_data.mask[engine_output.issued_token.token]:
+                    engine_output.issued_token.token = self.tokenizer.eos_token_id
+                    engine_output.issued_token.bytes = self.tokenizer.decode([engine_output.issued_token.token])
+                    # TODO: Should we set the prob to 1.0 here?
+                    engine_output.issued_token.prob = 1.0
             else:
-                token = None
+                engine_output = None
+
+            if response:
+                response.latency_ms = (time.time() - t0) * 1000
 
             yield response
+
+    def get_next_top_k_tokens(
+        self, token_ids: list[int], mask: Optional[bytes], temperature: float, k: int = 5
+    ) -> EngineOutput:
+        t0 = time.time()
+        logits = self.get_logits(token_ids)
+        lat_ms = (time.time() - t0) * 1000
+
+        def get_top_k(_probs: np.ndarray, _k: int = 5) -> list[GenToken]:
+            top_k_indices = np.argsort(_probs)[::-1][:_k]
+            top_k_probs = _probs[top_k_indices]
+
+            return [
+                GenToken(
+                    token=token,
+                    prob=prob,
+                    bytes=self.tokenizer.decode([token]),
+                    latency_ms=lat_ms,
+                    is_generated=True
+                )
+                for token, prob in zip(top_k_indices, top_k_probs) if prob > 0
+            ]
+
+        # compute top-k without masking
+        probs = softmax(logits) if temperature < 0.0001 else softmax(logits / temperature)
+        top_k: list[GenToken] = get_top_k(probs, k)
+
+        # compute top-k with masking
+        masked_top_k: list[GenToken] = []
+        if mask is not None:
+            masked_logits = logits * np.frombuffer(mask, dtype=np.uint8)
+            masked_probs = (
+                softmax(masked_logits)
+                if temperature < 0.0001
+                else softmax(masked_logits / temperature)
+            )
+            masked_top_k = get_top_k(masked_probs, k)
+
+        best_engine_token = masked_top_k[0] if len(masked_top_k) > 0 else top_k[0]
+
+        return EngineOutput(
+            issued_token=best_engine_token,
+            top_k=top_k,
+            masked_top_k=None if not masked_top_k else masked_top_k,
+            is_backtracked=False,
+        )
 
     def get_next_token(self, token_ids: list[int], mask: Optional[bytes], temperature: float) -> int:
         """Base implementation for getting the next token from the model which calls get_logits and sample_with_temperature.
@@ -256,6 +331,9 @@ class Model:
         self._parent_id = parent_id
         self._update_trace_node(self._id, self._parent_id, None)
 
+        self.vis_bytes_chunks: list[VisBytesChunk] = [] # store chunks data for visualization
+        self._last_inplace_append_len = 0
+
     @classmethod
     def gen_id(cls):
         global _id_counter
@@ -328,9 +406,20 @@ class Model:
         new_lm._parent_id = self._id
         self._update_trace_node(new_lm._id, new_lm._parent_id, None)
 
+        # for item in self.vis_bytes_chunks:
+        #     new_lm.vis_bytes_chunks.append(VisBytesChunk(
+        #         bytes=item.bytes,
+        #         is_generated=item.is_generated,
+        #         engine_outputs=[
+        #             _item.model_copy(deep=True) for _item in item.engine_outputs
+        #         ]
+        #     ))
+
+        new_lm.vis_bytes_chunks = [item.model_copy(deep=True) for item in self.vis_bytes_chunks]
+
         return new_lm
 
-    def _inplace_append(self, value, force_silent=False):
+    def _inplace_append(self, value, force_silent=False, append_vis_chunk: bool = True):
         """This is the base way to add content to the current LM object that is being constructed.
 
         All updates to the model state should eventually use this function.
@@ -346,6 +435,39 @@ class Model:
         v = value
         if not isinstance(v, str):
             v = str(value)
+            
+        if self.echo and append_vis_chunk and len(v) > 0:
+            # NOTE: only for visualization
+            _bytes = value.encode("utf8")
+
+            vis_chunk = VisBytesChunk(
+                bytes=_bytes,
+                is_generated=False,
+                engine_outputs=[]
+            )
+
+            # calculat tokens from input in case of token healing
+            _tokens = self.engine.tokenizer.encode(_bytes)
+            for _token in _tokens:
+                _bytes = self.engine.tokenizer.decode([_token])
+                vis_chunk.engine_outputs.append(
+                    EngineOutput(
+                        issued_token=GenToken(
+                            token=_token,
+                            prob=1.0,
+                            bytes=_bytes,
+                            latency_ms=0.0,
+                            is_generated=False
+                        ),
+                        top_k=[],
+                        masked_top_k=[],
+                        is_backtracked=False
+                    )
+                )
+
+            self.vis_bytes_chunks.append(vis_chunk)
+            self._last_inplace_append_len = len(_tokens)
+
         self._state += v
 
         # this is for programmatic streaming among other things
@@ -760,6 +882,23 @@ class Model:
                     continue
                 delayed_bytes = b""
 
+                if self.echo and chunk.backtrack:
+                    last_vis_chunk_idx = -1
+                    engine_output_idx = 0
+                    backtrack_count = 0
+                    while backtrack_count < chunk.backtrack:
+                        vis_chunk = lm.vis_bytes_chunks[last_vis_chunk_idx]
+
+                        if engine_output_idx < len(vis_chunk.engine_outputs):
+                            vis_chunk.engine_outputs[-1 - engine_output_idx].is_backtracked = True
+                            engine_output_idx += 1
+                        else:
+                            last_vis_chunk_idx -= 1
+                            engine_output_idx = 0
+                            continue
+
+                        backtrack_count += 1
+
                 if len(chunk.new_bytes) > 0:
                     generated_value += new_text
 
@@ -769,6 +908,14 @@ class Model:
                         token_count=chunk.new_token_count,
                         prob=chunk.new_bytes_prob,
                     )
+
+                    lm.vis_bytes_chunks.pop()
+
+                self.vis_bytes_chunks.append(VisBytesChunk(
+                    bytes=chunk.new_bytes,
+                    is_generated=chunk.is_generated,
+                    engine_outputs=chunk.engine_outputs
+                ))
 
                 # last_is_generated = chunk.is_generated
                 if len(chunk.capture_groups) > 0:

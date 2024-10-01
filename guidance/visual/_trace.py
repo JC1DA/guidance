@@ -109,4 +109,4 @@ def display_trace_tree(trace_handler: TraceHandler) -> None:
 
     for pre, fill, node in RenderTree(viz_root):
         tree_str = "%s%s" % (pre, node.name)
-        print(tree_str)
+        # print(tree_str)
