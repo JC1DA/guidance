@@ -60,7 +60,7 @@ class TokenParser:
         return self._done
 
     def advance(
-        self, token: Optional[EngineOutput]
+        self, token: Optional[list[EngineOutput]]
     ) -> Tuple[Optional[GenData], EngineCallResponse]:
         try:
             return self._generator.send(token)
@@ -85,11 +85,11 @@ class TokenParser:
         prompt: bytes,
         ensure_bos_token: bool,
     ) -> Generator[
-        Tuple[Optional[GenData], EngineCallResponse], Optional[EngineOutput], EngineCallResponse
+        Tuple[Optional[GenData], EngineCallResponse], Optional[list[EngineOutput]], EngineCallResponse
     ]:
         tokens = self._process_prompt(prompt=prompt, ensure_bos_token=ensure_bos_token)
 
-        engine_output: EngineOutput = None
+        engine_outputs: list[EngineOutput] = []
         ff_tokens = []
         backtrack = 0
 
@@ -97,51 +97,9 @@ class TokenParser:
             mask, resp = self.ll_interpreter.mid_process()
             r = LLInterpreterResponse.model_validate_json(resp)
             response = r.progress.to_engine_call_response()
-            if len(response.new_bytes) > 0 and len(ff_tokens) == 0:
-                # first iteration
-                ff_tokens = self.tokenizer.encode(response.new_bytes)
 
-            engine_outputs = []
-            for token_idx, new_token in enumerate(ff_tokens):
-                # TODO: should this be handled by the parser?
-                new_token_bytes = self.tokenizer.decode([new_token])
-                if token_idx > 0:
-                    # These are force-forwarded tokens, those tokens are appended after generated tokens
-                    engine_outputs.append(
-                        EngineOutput(
-                            issued_token=GenToken(
-                                token=new_token,
-                                prob=1.0,
-                                bytes=new_token_bytes,
-                                latency_ms=0,
-                                is_generated=False,
-                            ),
-                            top_k=None,
-                            masked_top_k=None,
-                            is_backtracked=False,
-                        )
-                    )
-                else:
-                    if engine_output is not None:
-                        engine_outputs.append(engine_output)
-                    else:
-                        # NOTE: it should not go into this?
-                        engine_outputs.append(
-                            EngineOutput(
-                                issued_token=GenToken(
-                                    token=new_token,
-                                    prob=1.0,
-                                    bytes=new_token_bytes,
-                                    latency_ms=0,
-                                    is_generated=False,
-                                ),
-                                top_k=None,
-                                masked_top_k=None,
-                                is_backtracked=False,
-                            )
-                        )
             response.engine_outputs = engine_outputs
-            response.backtrack = backtrack
+            # response.backtrack = backtrack
 
             if r.stop:
                 break
@@ -154,7 +112,8 @@ class TokenParser:
                     temperature=r.temperature,
                 )
                 # Send caller the mask and response; wait for token
-                engine_output = yield (gen_data, response)
+                engine_outputs = yield (gen_data, response)
+                engine_output = engine_outputs[-1] if engine_outputs is not None else None
                 if engine_output is None:
                     raise TokenParserException("Expected EngineOutput, got None")
                 if not mask[engine_output.issued_token.token]:
@@ -165,7 +124,8 @@ class TokenParser:
                     )
             else:
                 gen_data = None
-                engine_output = yield (gen_data, response)
+                engine_outputs = yield (gen_data, response)
+                engine_output = engine_outputs[-1]
                 if engine_output.issued_token.token is not None:
                     raise TokenParserException(
                         f"Expected None, got token {engine_output.issued_token.token}"
@@ -176,6 +136,7 @@ class TokenParser:
             )
             if backtrack:
                 tokens = tokens[:-backtrack]
+                engine_outputs = engine_outputs[:-backtrack]
             tokens = tokens + ff_tokens
 
         stop_reason = self.ll_interpreter.stop_reason()

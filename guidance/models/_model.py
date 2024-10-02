@@ -153,11 +153,11 @@ class Engine:
         """
         parser = self.start(prompt, grammar, ensure_bos_token)
 
-        engine_output = None
+        engine_outputs = None
         while not parser.done():
             t0 = time.time()
 
-            gen_data, response = parser.advance(engine_output)
+            gen_data, response = parser.advance(engine_outputs)
 
             if gen_data is not None:
                 # if parser.is_accepting() and self.tokenizer.eos_token_id is not None:
@@ -191,9 +191,10 @@ class Engine:
                 else:
                     mask = gen_data.mask
 
-                engine_output = self.get_next_top_k_tokens(
+                engine_outputs = self.get_next_top_k_tokens(
                     token_ids=gen_data.tokens, mask=mask, temperature=gen_data.temperature
                 )
+                engine_output = engine_outputs[-1]
 
                 if is_in_accepting_state and not gen_data.mask[engine_output.issued_token.token]:
                     engine_output.issued_token.token = self.tokenizer.eos_token_id
@@ -203,7 +204,7 @@ class Engine:
                     # TODO: Should we set the prob to 1.0 here?
                     engine_output.issued_token.prob = 1.0
             else:
-                engine_output = None
+                engine_outputs = []
 
             if response:
                 response.latency_ms = (time.time() - t0) * 1000
@@ -212,9 +213,9 @@ class Engine:
 
     def get_next_top_k_tokens(
         self, token_ids: list[int], mask: Optional[bytes], temperature: float, k: int = 5
-    ) -> EngineOutput:
+    ) -> list[EngineOutput]:
         t0 = time.time()
-        logits = self.get_logits(token_ids)
+        new_tokens_logits = self.get_logits(token_ids, last_token_only=False)
         lat_ms = (time.time() - t0) * 1000
 
         def get_top_k(_probs: np.ndarray, _k: int = 5) -> list[GenToken]:
@@ -234,28 +235,55 @@ class Engine:
             ]
 
         # compute top-k without masking
-        probs = softmax(logits) if temperature < 0.0001 else softmax(logits / temperature)
-        top_k: list[GenToken] = get_top_k(probs, k)
+        probs = softmax(new_tokens_logits) if temperature < 0.0001 else softmax(new_tokens_logits / temperature)
 
-        # compute top-k with masking
-        masked_top_k: list[GenToken] = []
-        if mask is not None:
-            masked_logits = logits * np.frombuffer(mask, dtype=np.uint8)
-            masked_probs = (
-                softmax(masked_logits)
-                if temperature < 0.0001
-                else softmax(masked_logits / temperature)
-            )
-            masked_top_k = get_top_k(masked_probs, k)
+        engine_list = []
+        unseen_tokens = token_ids[-len(probs):][1:]
+        #for _probs, _logits in zip(probs, logits):
+        for i in range(len(probs)):
+            _probs = probs[i]
 
-        best_engine_token = masked_top_k[0] if len(masked_top_k) > 0 else top_k[0]
+            top_k: list[GenToken] = get_top_k(_probs, k)
 
-        return EngineOutput(
-            issued_token=best_engine_token,
-            top_k=top_k,
-            masked_top_k=None if not masked_top_k else masked_top_k,
-            is_backtracked=False,
-        )
+            # compute top-k with masking
+            # masked_top_k: list[GenToken] = []
+            # if mask is not None:
+            #     masked_logits = _logits * np.frombuffer(mask, dtype=np.uint8)
+            #     masked_probs = (
+            #         softmax(masked_logits)
+            #         if temperature < 0.0001
+            #         else softmax(masked_logits / temperature)
+            #     )
+            #     masked_top_k = get_top_k(masked_probs, k)
+
+            # best_engine_token = masked_top_k[0] if len(masked_top_k) > 0 else top_k[0]
+
+            issued_token = top_k[0]
+            if i < len(unseen_tokens):
+                token = unseen_tokens[i + 1]
+                issued_token = GenToken(
+                    token=token,
+                    prob=_probs[token],
+                    bytes=self.tokenizer.decode([token]),
+                    latency_ms=0,
+                    is_generated=False,
+                )
+
+            # engine_list.append(EngineOutput(
+            #     issued_token=best_engine_token,
+            #     top_k=top_k,
+            #     masked_top_k=None if not masked_top_k else masked_top_k,
+            #     is_backtracked=False,
+            # ))
+
+            engine_list.append(EngineOutput(
+                issued_token=issued_token,
+                top_k=[],
+                masked_top_k=[],
+                is_backtracked=False,
+            ))
+
+        return engine_list 
 
     def get_next_token(
         self, token_ids: list[int], mask: Optional[bytes], temperature: float
@@ -267,7 +295,7 @@ class Engine:
         token = self.sample_with_temperature(logits, mask, temperature)
         return token
 
-    def get_logits(self, token_ids: list[int]) -> np.ndarray:
+    def get_logits(self, token_ids: list[int], last_token_only: bool = True) -> np.ndarray:
         raise NotImplementedError
 
     def sample_with_temperature(
@@ -480,29 +508,29 @@ class Model:
             # NOTE: only for visualization
             _bytes = value.encode("utf8")
 
-            vis_chunk = VisBytesChunk(bytes=_bytes, is_generated=False, engine_outputs=[])
+            # vis_chunk = VisBytesChunk(bytes=_bytes, is_generated=False, engine_outputs=[])
 
-            # calculat tokens from input in case of token healing
-            _tokens = self.engine.tokenizer.encode(_bytes)
-            for _token in _tokens:
-                _bytes = self.engine.tokenizer.decode([_token])
-                vis_chunk.engine_outputs.append(
-                    EngineOutput(
-                        issued_token=GenToken(
-                            token=_token,
-                            prob=1.0,
-                            bytes=_bytes,
-                            latency_ms=0.0,
-                            is_generated=False,
-                        ),
-                        top_k=[],
-                        masked_top_k=[],
-                        is_backtracked=False,
-                    )
-                )
+            # # calculat tokens from input in case of token healing
+            # _tokens = self.engine.tokenizer.encode(_bytes)
+            # for _token in _tokens:
+            #     _bytes = self.engine.tokenizer.decode([_token])
+            #     vis_chunk.engine_outputs.append(
+            #         EngineOutput(
+            #             issued_token=GenToken(
+            #                 token=_token,
+            #                 prob=1.0,
+            #                 bytes=_bytes,
+            #                 latency_ms=0.0,
+            #                 is_generated=False,
+            #             ),
+            #             top_k=[],
+            #             masked_top_k=[],
+            #             is_backtracked=False,
+            #         )
+            #     )
 
-            self.vis_bytes_chunks.append(vis_chunk)
-            self._last_inplace_append_len = len(_tokens)
+            # self.vis_bytes_chunks.append(vis_chunk)
+            # self._last_inplace_append_len = len(_tokens)
 
         self._state += v
 
@@ -916,26 +944,26 @@ class Model:
                     continue
                 delayed_bytes = b""
 
-                if self.echo and chunk.backtrack:
-                    last_vis_chunk_idx = -1
-                    engine_output_idx = 0
-                    backtrack_count = 0
-                    while backtrack_count < chunk.backtrack:
-                        vis_chunk = lm.vis_bytes_chunks[last_vis_chunk_idx]
+                # if self.echo and chunk.backtrack:
+                #     last_vis_chunk_idx = -1
+                #     engine_output_idx = 0
+                #     backtrack_count = 0
+                #     while backtrack_count < chunk.backtrack:
+                #         vis_chunk = lm.vis_bytes_chunks[last_vis_chunk_idx]
 
-                        if engine_output_idx < len(vis_chunk.engine_outputs):
-                            vis_chunk.engine_outputs[-1 - engine_output_idx].is_backtracked = True
-                            engine_output_idx += 1
-                        else:
-                            last_vis_chunk_idx -= 1
-                            engine_output_idx = 0
-                            continue
+                #         if engine_output_idx < len(vis_chunk.engine_outputs):
+                #             vis_chunk.engine_outputs[-1 - engine_output_idx].is_backtracked = True
+                #             engine_output_idx += 1
+                #         else:
+                #             last_vis_chunk_idx -= 1
+                #             engine_output_idx = 0
+                #             continue
 
-                        backtrack_count += 1
+                #         backtrack_count += 1
 
-                    # last generated token is also backtracked
-                    if len(chunk.engine_outputs) > 0:
-                        chunk.engine_outputs[-1].is_backtracked = True
+                #     # last generated token is also backtracked
+                #     if len(chunk.engine_outputs) > 0:
+                #         chunk.engine_outputs[-1].is_backtracked = True
 
                 if len(chunk.new_bytes) > 0:
                     generated_value += new_text
@@ -947,7 +975,11 @@ class Model:
                         prob=chunk.new_bytes_prob,
                     )
 
-                    lm.vis_bytes_chunks.pop()
+                    # lm.vis_bytes_chunks.pop()
+
+                for item in chunk.engine_outputs:
+                    item.top_k = []
+                    item.masked_top_k = []
 
                 lm.vis_bytes_chunks.append(
                     VisBytesChunk(

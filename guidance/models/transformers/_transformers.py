@@ -427,7 +427,7 @@ class TransformersEngine(Engine):
             model = transformers_package.AutoModelForCausalLM.from_pretrained(model, **kwargs)
         return model
 
-    def get_logits(self, token_ids):
+    def get_logits(self, token_ids: list[int], last_token_only: bool = True):
         """Computes the logits for the given token state.
 
         This overrides a method from the LocalEngine class that is used to get
@@ -507,13 +507,16 @@ class TransformersEngine(Engine):
             self._past_key_values = model_out.past_key_values
             cache_token_ids.extend(new_token_ids)
             # Need to add special truncating logic here for weird models that have a different output size than tokenizer vocab
-            self._cached_logits = (
+
+            self._cached_logits = logits = (
                 model_out.logits[0, -1, : len(self.tokenizer.tokens)].cpu().numpy()
             )
+            if not last_token_only:
+                logits = model_out.logits[0, :, : len(self.tokenizer.tokens)].cpu().numpy()
             self.metrics.engine_input_tokens += len(new_token_ids)
             self.metrics.engine_output_tokens += 1
 
-        return self._cached_logits
+        return logits
 
 
 class Transformers(Model):
