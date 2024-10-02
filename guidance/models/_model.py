@@ -192,7 +192,10 @@ class Engine:
                     mask = gen_data.mask
 
                 engine_outputs = self.get_next_top_k_tokens(
-                    token_ids=gen_data.tokens, mask=mask, temperature=gen_data.temperature
+                    token_ids=gen_data.tokens,
+                    mask=mask,
+                    temperature=gen_data.temperature,
+                    backtrack=gen_data.backtrack,
                 )
                 engine_output = engine_outputs[-1]
 
@@ -206,16 +209,40 @@ class Engine:
             else:
                 engine_outputs = []
 
+                if response.backtrack:
+                    # remove some cached tokens
+                    self.remove_cached_tokens(n=response.backtrack)
+
+                # last_engine_outputs = self.get_next_top_k_tokens(
+                #     token_ids=response.tokens,
+                #     mask=None,
+                #     temperature=0,
+                #     backtrack=response.backtrack,
+                # )[:-1]
+
+                # response.engine_outputs.extend(last_engine_outputs)
+
             if response:
                 response.latency_ms = (time.time() - t0) * 1000
 
             yield response
 
+    def remove_cached_tokens(self, n: int = 0):
+        raise NotImplementedError
+
     def get_next_top_k_tokens(
-        self, token_ids: list[int], mask: Optional[bytes], temperature: float, k: int = 5
+        self,
+        token_ids: list[int],
+        mask: Optional[bytes],
+        temperature: float,
+        k: int = 5,
+        backtrack: int = 0,
     ) -> list[EngineOutput]:
         t0 = time.time()
         new_tokens_logits = self.get_logits(token_ids, last_token_only=False)
+        if new_tokens_logits is None:
+            return []
+
         lat_ms = (time.time() - t0) * 1000
 
         def get_top_k(_probs: np.ndarray, _k: int = 5) -> list[GenToken]:
@@ -235,32 +262,55 @@ class Engine:
             ]
 
         # compute top-k without masking
-        probs = softmax(new_tokens_logits) if temperature < 0.0001 else softmax(new_tokens_logits / temperature)
+        probs = (
+            softmax(new_tokens_logits)
+            if temperature < 0.0001
+            else softmax(new_tokens_logits / temperature)
+        )
 
         engine_list = []
-        unseen_tokens = token_ids[-len(probs):][1:]
-        #for _probs, _logits in zip(probs, logits):
-        for i in range(len(probs)):
-            _probs = probs[i]
+        unseen_tokens = token_ids[-len(probs) :][1:]
+        # for _probs, _logits in zip(probs, logits):
 
+        # we're missing the very first token
+        if len(token_ids) == len(probs):
+            first_token = token_ids[0]
+            engine_list.insert(
+                0,
+                EngineOutput(
+                    issued_token=GenToken(
+                        token=first_token,
+                        prob=1.0,
+                        bytes=self.tokenizer.decode([first_token]),
+                        latency_ms=0,
+                        is_generated=False,
+                    ),
+                    top_k=[],
+                    masked_top_k=[],
+                    is_backtracked=False,
+                ),
+            )
+
+        for i, _probs in enumerate(probs):
             top_k: list[GenToken] = get_top_k(_probs, k)
+            _logits = new_tokens_logits[i]
 
             # compute top-k with masking
-            # masked_top_k: list[GenToken] = []
-            # if mask is not None:
-            #     masked_logits = _logits * np.frombuffer(mask, dtype=np.uint8)
-            #     masked_probs = (
-            #         softmax(masked_logits)
-            #         if temperature < 0.0001
-            #         else softmax(masked_logits / temperature)
-            #     )
-            #     masked_top_k = get_top_k(masked_probs, k)
+            masked_top_k: list[GenToken] = []
+            if mask is not None:
+                masked_logits = _logits * np.frombuffer(mask, dtype=np.uint8)
+                masked_probs = (
+                    softmax(masked_logits)
+                    if temperature < 0.0001
+                    else softmax(masked_logits / temperature)
+                )
+                masked_top_k = get_top_k(masked_probs, k)
 
             # best_engine_token = masked_top_k[0] if len(masked_top_k) > 0 else top_k[0]
 
-            issued_token = top_k[0]
+            issued_token = masked_top_k[0] if len(masked_top_k) > 0 else top_k[0]
             if i < len(unseen_tokens):
-                token = unseen_tokens[i + 1]
+                token = unseen_tokens[i]
                 issued_token = GenToken(
                     token=token,
                     prob=_probs[token],
@@ -276,14 +326,24 @@ class Engine:
             #     is_backtracked=False,
             # ))
 
-            engine_list.append(EngineOutput(
-                issued_token=issued_token,
-                top_k=[],
-                masked_top_k=[],
-                is_backtracked=False,
-            ))
+            engine_list.append(
+                EngineOutput(
+                    issued_token=issued_token,
+                    top_k=[],
+                    masked_top_k=[],
+                    is_backtracked=False,
+                )
+            )
 
-        return engine_list 
+        input_prompt = self.tokenizer.decode(token_ids).decode("utf-8")
+        engine_output = "".join([item.issued_token.bytes.decode("utf-8") for item in engine_list])
+
+        # print("[ITER]")
+        # print(f"Prompt: '{input_prompt}'")
+        # print(f"Output: '{engine_output}'")
+        # print("[/ITER]")
+
+        return engine_list
 
     def get_next_token(
         self, token_ids: list[int], mask: Optional[bytes], temperature: float
@@ -295,7 +355,9 @@ class Engine:
         token = self.sample_with_temperature(logits, mask, temperature)
         return token
 
-    def get_logits(self, token_ids: list[int], last_token_only: bool = True) -> np.ndarray:
+    def get_logits(
+        self, token_ids: list[int], last_token_only: bool = True, cache_backtrack: int = 0
+    ) -> np.ndarray:
         raise NotImplementedError
 
     def sample_with_temperature(
@@ -400,6 +462,7 @@ class Model:
 
         self.vis_bytes_chunks: list[VisBytesChunk] = []  # store chunks data for visualization
         self._last_inplace_append_len = 0
+        self.vis_bytes_chunk: VisBytesChunk = None
 
     @classmethod
     def gen_id(cls):
@@ -484,6 +547,7 @@ class Model:
         #     ))
 
         new_lm.vis_bytes_chunks = [item.model_copy(deep=True) for item in self.vis_bytes_chunks]
+        new_lm.vis_bytes_chunk = None
 
         return new_lm
 
@@ -944,50 +1008,31 @@ class Model:
                     continue
                 delayed_bytes = b""
 
-                # if self.echo and chunk.backtrack:
-                #     last_vis_chunk_idx = -1
-                #     engine_output_idx = 0
-                #     backtrack_count = 0
-                #     while backtrack_count < chunk.backtrack:
-                #         vis_chunk = lm.vis_bytes_chunks[last_vis_chunk_idx]
-
-                #         if engine_output_idx < len(vis_chunk.engine_outputs):
-                #             vis_chunk.engine_outputs[-1 - engine_output_idx].is_backtracked = True
-                #             engine_output_idx += 1
-                #         else:
-                #             last_vis_chunk_idx -= 1
-                #             engine_output_idx = 0
-                #             continue
-
-                #         backtrack_count += 1
-
-                #     # last generated token is also backtracked
-                #     if len(chunk.engine_outputs) > 0:
-                #         chunk.engine_outputs[-1].is_backtracked = True
-
-                if len(chunk.new_bytes) > 0:
-                    generated_value += new_text
-
-                    lm += TextOutput(
-                        value=new_text,
-                        is_generated=chunk.is_generated,
-                        token_count=chunk.new_token_count,
-                        prob=chunk.new_bytes_prob,
-                    )
-
-                    # lm.vis_bytes_chunks.pop()
-
                 for item in chunk.engine_outputs:
                     item.top_k = []
                     item.masked_top_k = []
 
-                lm.vis_bytes_chunks.append(
-                    VisBytesChunk(
-                        bytes=chunk.new_bytes,
-                        is_generated=chunk.is_generated,
-                        engine_outputs=chunk.engine_outputs,
-                    )
+                vis_bytes_chunk = VisBytesChunk(
+                    bytes=chunk.new_bytes,
+                    is_generated=chunk.is_generated,
+                    engine_outputs=chunk.engine_outputs,
+                    backtrack=chunk.backtrack,
                 )
+
+                if len(chunk.new_bytes) > 0:
+                    generated_value += new_text
+
+                # empty chunk may contain tokens info
+                lm += TextOutput(
+                    value=new_text,
+                    is_generated=chunk.is_generated,
+                    token_count=chunk.new_token_count,
+                    prob=chunk.new_bytes_prob,
+                    vis_chunk=vis_bytes_chunk,
+                )
+
+                lm.vis_bytes_chunk = vis_bytes_chunk
+                lm.vis_bytes_chunks.append(vis_bytes_chunk)
 
                 # last_is_generated = chunk.is_generated
                 if len(chunk.capture_groups) > 0:

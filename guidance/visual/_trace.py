@@ -29,6 +29,32 @@ def trace_node_to_html(node: TraceNode, prettify_roles=False) -> str:
     node_path = list(node.path())
     active_role: Optional[TraceNode] = None
 
+    state = ""
+    vis_engine_list = []
+    for node in node_path:
+        if not isinstance(node.output, TextOutput):
+            continue
+
+        if node.output.vis_chunk is None:
+            continue
+
+        vis_chunk = node.output.vis_chunk
+        engine_outputs = vis_chunk.engine_outputs
+
+        if vis_chunk.backtrack:
+            for _ in range(vis_chunk.backtrack):
+                vis_engine_list.pop()
+
+            engine_outputs = engine_outputs[1:]
+
+        for engine_output in engine_outputs:
+            vis_engine_list.append(engine_output)
+
+    for engine_output in vis_engine_list:
+        state += engine_output.issued_token.bytes.decode("utf-8")
+
+    print("State:", f"'{state}'")
+
     for i, node in enumerate(node_path):
         if isinstance(node.input, RoleOpenerInput):
             active_role = node

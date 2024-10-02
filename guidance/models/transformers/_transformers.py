@@ -35,11 +35,14 @@ _COMMON_TRANSFORMERS_KWARGS = [
     "trust_remote_code",
 ]
 
+
 class ByteDecoderError(Exception):
     pass
 
+
 class ByteTokensError(Exception):
     pass
+
 
 class TransformersTokenizer(Tokenizer):
     def __init__(
@@ -104,10 +107,14 @@ class TransformersTokenizer(Tokenizer):
             raise
         except ByteTokensError as e:
             # Give a specific warning for ByteTokensError and fall back to fast tokenizer
-            warnings.warn(f"Falling back to fast tokenizer. Could not build byte tokens for model {model!r} due to exception {e.__class__.__name__}: {e}")
+            warnings.warn(
+                f"Falling back to fast tokenizer. Could not build byte tokens for model {model!r} due to exception {e.__class__.__name__}: {e}"
+            )
         except Exception as e:
             # Fall back for other exceptions
-            warnings.warn(f"Falling back to fast tokenizer. Could not load tokenizer for model {model!r} due to exception {e.__class__.__name__}: {e}")
+            warnings.warn(
+                f"Falling back to fast tokenizer. Could not load tokenizer for model {model!r} due to exception {e.__class__.__name__}: {e}"
+            )
         else:
             return tokenizer, byte_tokens
 
@@ -139,7 +146,9 @@ class TransformersTokenizer(Tokenizer):
                 )
                 pass
             else:
-                return self._byte_tokens_from_byte_decoder(transformers_tokenizer.byte_decoder, transformers_tokenizer)
+                return self._byte_tokens_from_byte_decoder(
+                    transformers_tokenizer.byte_decoder, transformers_tokenizer
+                )
 
         if hasattr(transformers_tokenizer, "sp_model"):
             return self._byte_tokens_from_sp_model(transformers_tokenizer)
@@ -154,9 +163,7 @@ class TransformersTokenizer(Tokenizer):
 
         fallback_byte_decoder = self._fallback_byte_decoder()
         try:
-            self._check_byte_decoder(
-                fallback_byte_decoder, transformers_tokenizer
-            )
+            self._check_byte_decoder(fallback_byte_decoder, transformers_tokenizer)
         except ByteDecoderError as e:
             # Should be the only exception that is raised in _byte_tokens
             raise ByteTokensError(
@@ -230,7 +237,9 @@ class TransformersTokenizer(Tokenizer):
                         token_str = transformers_tokenizer.convert_tokens_to_string([token])
                         encoded_str = transformers_tokenizer.encode(token_str)
                         if len(encoded_str) != 1:
-                            raise ValueError(f"Round-trip encoding of tokens [{token}] failed! Got {encoded_str}")
+                            raise ValueError(
+                                f"Round-trip encoding of tokens [{token}] failed! Got {encoded_str}"
+                            )
                         roundtrip_id = encoded_str[0]
                         if roundtrip_id == i:
                             byte_coded = token_str.encode()
@@ -246,7 +255,7 @@ class TransformersTokenizer(Tokenizer):
     def _fallback_byte_decoder(self) -> dict[str, int]:
         byte_decoder = transformers_package.AutoTokenizer.from_pretrained(
             "gpt2", use_fast=False
-        ).byte_decoder # fall back to gpt2 mapping
+        ).byte_decoder  # fall back to gpt2 mapping
 
         # some special tokens may not have their whitespace encoded...
         byte_decoder[" "] = 32
@@ -293,8 +302,10 @@ class TransformersTokenizer(Tokenizer):
                 # if it's at the start of the reconstructed bytes
                 # Some tokenizers add this automatically as part of the call function, so
                 # we need to remove it to compare
-                if hasattr(transformers_tokenizer, "bos_token") and transformers_tokenizer.bos_token and reconstructed.startswith(
-                    transformers_tokenizer.bos_token.encode()
+                if (
+                    hasattr(transformers_tokenizer, "bos_token")
+                    and transformers_tokenizer.bos_token
+                    and reconstructed.startswith(transformers_tokenizer.bos_token.encode())
                 ):
                     reconstructed = reconstructed[len(transformers_tokenizer.bos_token) :]
             # TODO: can we narrow this exception?
@@ -427,7 +438,13 @@ class TransformersEngine(Engine):
             model = transformers_package.AutoModelForCausalLM.from_pretrained(model, **kwargs)
         return model
 
-    def get_logits(self, token_ids: list[int], last_token_only: bool = True):
+    def remove_cached_tokens(self, n: int = 0):
+        if n > 0:
+            self._cached_token_ids = self._cached_token_ids[:-n]
+
+    def get_logits(
+        self, token_ids: list[int], last_token_only: bool = True, cache_backtrack: int = 0
+    ):
         """Computes the logits for the given token state.
 
         This overrides a method from the LocalEngine class that is used to get
@@ -439,6 +456,12 @@ class TransformersEngine(Engine):
             raise Exception(
                 f"Attempted to run a transformers model past its maximum context window size of {self.model_obj.config.max_position_embeddings}!"
             )
+
+        if cache_backtrack:
+            for _ in range(cache_backtrack):
+                if len(self._cached_token_ids) == 0:
+                    break
+                self._cached_token_ids.pop()
 
         # get the number of cache positions we are using
         cache_token_ids = self._cached_token_ids
@@ -465,6 +488,7 @@ class TransformersEngine(Engine):
 
         # call the model
         new_token_ids = token_ids[past_length:]
+        # logits = None
         if len(new_token_ids) > 0:
             with torch.no_grad():
                 # Not all models support batched tokens for some reason

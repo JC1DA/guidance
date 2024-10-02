@@ -7,6 +7,8 @@ from itertools import count
 from typing import Any, Optional, Generator, Dict
 
 from pydantic import BaseModel, Field
+
+from guidance._schema import VisBytesChunk
 from .._utils import pydantic_no_default_repr, pydantic_no_default_str
 
 
@@ -94,6 +96,7 @@ class TextOutput(OutputAttr):
     is_generated: bool = False
     token_count: int = 0
     prob: float = 0.0
+    vis_chunk: Optional[VisBytesChunk] = None
 
     def __str__(self):
         return self.value

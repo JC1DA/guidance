@@ -85,7 +85,9 @@ class TokenParser:
         prompt: bytes,
         ensure_bos_token: bool,
     ) -> Generator[
-        Tuple[Optional[GenData], EngineCallResponse], Optional[list[EngineOutput]], EngineCallResponse
+        Tuple[Optional[GenData], EngineCallResponse],
+        Optional[list[EngineOutput]],
+        EngineCallResponse,
     ]:
         tokens = self._process_prompt(prompt=prompt, ensure_bos_token=ensure_bos_token)
 
@@ -99,7 +101,8 @@ class TokenParser:
             response = r.progress.to_engine_call_response()
 
             response.engine_outputs = engine_outputs
-            # response.backtrack = backtrack
+            response.backtrack = backtrack
+            response.tokens = tokens
 
             if r.stop:
                 break
@@ -110,6 +113,7 @@ class TokenParser:
                     tokens=tokens,
                     mask=mask,
                     temperature=r.temperature,
+                    backtrack=backtrack,
                 )
                 # Send caller the mask and response; wait for token
                 engine_outputs = yield (gen_data, response)
@@ -136,7 +140,7 @@ class TokenParser:
             )
             if backtrack:
                 tokens = tokens[:-backtrack]
-                engine_outputs = engine_outputs[:-backtrack]
+                # engine_outputs = engine_outputs[:-backtrack]
             tokens = tokens + ff_tokens
 
         stop_reason = self.ll_interpreter.stop_reason()
