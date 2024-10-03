@@ -97,6 +97,7 @@ class TextOutput(OutputAttr):
     token_count: int = 0
     prob: float = 0.0
     vis_chunk: Optional[VisBytesChunk] = None
+    disabled: bool = False
 
     def __str__(self):
         return self.value

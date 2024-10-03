@@ -458,6 +458,7 @@ class Model:
 
         self._id = self.__class__.gen_id()  # model id needed for tracking state
         self._parent_id = parent_id
+        self._parent: "Model" = None
         self._update_trace_node(self._id, self._parent_id, None)
 
         self.vis_bytes_chunks: list[VisBytesChunk] = []  # store chunks data for visualization
@@ -549,9 +550,11 @@ class Model:
         new_lm.vis_bytes_chunks = [item.model_copy(deep=True) for item in self.vis_bytes_chunks]
         new_lm.vis_bytes_chunk = None
 
+        new_lm._parent = self
+
         return new_lm
 
-    def _inplace_append(self, value, force_silent=False, append_vis_chunk: bool = True):
+    def _inplace_append(self, value, force_silent=False, append_vis_chunk: bool = False):
         """This is the base way to add content to the current LM object that is being constructed.
 
         All updates to the model state should eventually use this function.
@@ -572,29 +575,31 @@ class Model:
             # NOTE: only for visualization
             _bytes = value.encode("utf8")
 
-            # vis_chunk = VisBytesChunk(bytes=_bytes, is_generated=False, engine_outputs=[])
+            vis_chunk = VisBytesChunk(
+                bytes=_bytes, is_input=True, is_generated=False, engine_outputs=[]
+            )
 
-            # # calculat tokens from input in case of token healing
-            # _tokens = self.engine.tokenizer.encode(_bytes)
-            # for _token in _tokens:
-            #     _bytes = self.engine.tokenizer.decode([_token])
-            #     vis_chunk.engine_outputs.append(
-            #         EngineOutput(
-            #             issued_token=GenToken(
-            #                 token=_token,
-            #                 prob=1.0,
-            #                 bytes=_bytes,
-            #                 latency_ms=0.0,
-            #                 is_generated=False,
-            #             ),
-            #             top_k=[],
-            #             masked_top_k=[],
-            #             is_backtracked=False,
-            #         )
-            #     )
+            # calculat tokens from input in case of token healing
+            _tokens = self.engine.tokenizer.encode(_bytes)
+            for _token in _tokens:
+                _bytes = self.engine.tokenizer.decode([_token])
+                vis_chunk.engine_outputs.append(
+                    EngineOutput(
+                        issued_token=GenToken(
+                            token=_token,
+                            prob=1.0,
+                            bytes=_bytes,
+                            latency_ms=0.0,
+                            is_generated=False,
+                        ),
+                        top_k=[],
+                        masked_top_k=[],
+                        is_backtracked=False,
+                    )
+                )
 
-            # self.vis_bytes_chunks.append(vis_chunk)
-            # self._last_inplace_append_len = len(_tokens)
+            self.vis_bytes_chunks.append(vis_chunk)
+            self.vis_bytes_chunk = vis_chunk
 
         self._state += v
 
@@ -753,10 +758,12 @@ class Model:
             if len(parts) == 1:
                 self._update_trace_node(lm._id, lm._parent_id, LiteralInput(value=value))
 
-                lm._inplace_append(value)
+                lm._inplace_append(value, append_vis_chunk=True)
                 out = lm
 
-                self._update_trace_node(out._id, out._parent_id, TextOutput(value=value))
+                self._update_trace_node(
+                    out._id, out._parent_id, TextOutput(value=value, vis_chunk=out.vis_bytes_chunk)
+                )
 
             # if we have embedded objects we have to convert the string to a grammar tree
             else:
@@ -1012,12 +1019,31 @@ class Model:
                     item.top_k = []
                     item.masked_top_k = []
 
+                # process backtrack if we have it
+                if chunk.backtrack:
+                    _lm = lm._parent
+                    while chunk.backtrack > 0 and _lm is not None:
+                        if _lm.vis_bytes_chunk is None:
+                            _lm = _lm._parent
+                            continue
+
+                        if len(_lm.vis_bytes_chunk.engine_outputs) == 0:
+                            _lm = _lm._parent
+                            continue
+
+                        _lm.vis_bytes_chunk.engine_outputs.pop()
+                        chunk.backtrack -= 1
+
+                    chunk.engine_outputs.pop(0)
+
                 vis_bytes_chunk = VisBytesChunk(
                     bytes=chunk.new_bytes,
                     is_generated=chunk.is_generated,
                     engine_outputs=chunk.engine_outputs,
                     backtrack=chunk.backtrack,
                 )
+
+                lm.vis_bytes_chunk = vis_bytes_chunk
 
                 if len(chunk.new_bytes) > 0:
                     generated_value += new_text
@@ -1031,7 +1057,6 @@ class Model:
                     vis_chunk=vis_bytes_chunk,
                 )
 
-                lm.vis_bytes_chunk = vis_bytes_chunk
                 lm.vis_bytes_chunks.append(vis_bytes_chunk)
 
                 # last_is_generated = chunk.is_generated

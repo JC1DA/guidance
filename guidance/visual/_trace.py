@@ -1,6 +1,8 @@
 import base64
 from typing import Optional, Dict
 
+from guidance._schema import EngineOutput
+
 from ..trace import (
     TextOutput,
     TraceNode,
@@ -29,23 +31,76 @@ def trace_node_to_html(node: TraceNode, prettify_roles=False) -> str:
     node_path = list(node.path())
     active_role: Optional[TraceNode] = None
 
-    state = ""
-    vis_engine_list = []
+    output_nodes: list[TraceNode] = []
     for node in node_path:
         if not isinstance(node.output, TextOutput):
             continue
 
         if node.output.vis_chunk is None:
+            node.output.disabled = True
+            continue
+
+        # if not node.output.vis_chunk.engine_outputs:
+        #     continue
+
+        output_nodes.append(node)
+
+    # for node_idx, node in enumerate(output_nodes):
+    #     prev_node = None if node_idx == 0 else output_nodes[node_idx - 1]
+    #     if prev_node is None:
+    #         continue
+
+    #     prev_output_attr: TextOutput = prev_node.output
+
+    #     if not prev_output_attr.vis_chunk.is_input:
+    #         continue
+
+    #     prev_engine_outputs: list[EngineOutput] = prev_output_attr.vis_chunk.engine_outputs
+    #     current_engine_outputs: list[EngineOutput] = node.output.vis_chunk.engine_outputs
+
+    #     if len(prev_engine_outputs) > len(current_engine_outputs):
+    #         continue
+
+    #     idx = 0
+    #     while idx < len(prev_engine_outputs):
+    #         if (
+    #             prev_engine_outputs[idx].issued_token.bytes
+    #             != current_engine_outputs[idx].issued_token.bytes
+    #         ):
+    #             break
+    #         idx += 1
+
+    #     if idx < len(prev_engine_outputs):
+    #         continue
+
+    #     # clear entire prev node
+    #     node.output.disabled = True
+
+    state = ""
+    vis_engine_list = []
+    for node_idx, node in enumerate(output_nodes):
+        if not isinstance(node.output, TextOutput):
+            continue
+
+        if node.output.vis_chunk is None:
+            node.output.disabled = True
+            continue
+
+        if node.output.vis_chunk.is_input and node_idx < len(output_nodes) - 1:
+            node.output.disabled = True
+            continue
+
+        if node.output.disabled:
             continue
 
         vis_chunk = node.output.vis_chunk
         engine_outputs = vis_chunk.engine_outputs
 
-        if vis_chunk.backtrack:
-            for _ in range(vis_chunk.backtrack):
-                vis_engine_list.pop()
+        # if vis_chunk.backtrack:
+        #     for _ in range(vis_chunk.backtrack):
+        #         vis_engine_list.pop()
 
-            engine_outputs = engine_outputs[1:]
+        #     engine_outputs = engine_outputs[1:]
 
         for engine_output in engine_outputs:
             vis_engine_list.append(engine_output)
@@ -72,12 +127,24 @@ def trace_node_to_html(node: TraceNode, prettify_roles=False) -> str:
 
             if not (active_role and prettify_roles):
                 attr = node.output
-                if attr.is_generated:
-                    fmt = f"<span style='background-color: rgba({165 * (1 - attr.prob)}, {165 * attr.prob}, 0, 0.15); border-radius: 3ps;' title='{attr.prob}'>{html.escape(attr.value)}</span>"
-                else:
-                    fmt = f"{html.escape(attr.value)}"
-                buffer.append(fmt)
 
+                # if attr.is_generated:
+                #     fmt = f"<span style='background-color: rgba({165 * (1 - attr.prob)}, {165 * attr.prob}, 0, 0.15); border-radius: 3ps;' title='{attr.prob}'>{html.escape(attr.value)}</span>"
+                # else:
+                #     fmt = f"{html.escape(attr.value)}"
+
+                fmt = ""
+                if not node.output.disabled and attr.vis_chunk:
+                    engine_outputs = attr.vis_chunk.engine_outputs
+                    for engine_output in engine_outputs:
+                        token_str = engine_output.issued_token.bytes.decode("utf-8")
+                        if engine_output.issued_token.is_generated:
+                            # fmt += f"<span style='background-color: rgba({165 * (1 - engine_output.issued_token.prob)}, {165 * engine_output.issued_token.prob}, 0, 0.15); border-radius: 3px;' title='{engine_output.issued_token.prob}'>{html.escape(token_str)}</span>"
+                            fmt += f"<span style='background-color: rgba({0}, {127 + 127 * engine_output.issued_token.prob}, 0, 0.15); border-radius: 3px;' title='{engine_output.issued_token.prob}'>{html.escape(token_str)}</span>"
+                        else:
+                            fmt += f"<span style='background-color: rgba({127}, {127}, 127, 0.15); border-radius: 3px;' title='{engine_output.issued_token.prob}'>{html.escape(token_str)}</span>"
+
+                buffer.append(fmt)
             if active_role is not None:
                 if not prettify_roles:
                     buffer.append(span_end)
