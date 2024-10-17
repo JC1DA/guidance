@@ -37,7 +37,11 @@ extras_requires = {
     "openai": ["openai>=1.0"],
     "schemas": ["jsonschema"],
     "server": ["fastapi-slim", "uvicorn"],
+<<<<<<< HEAD
     "visual": ["stitch"],  # TODO(nopdive): Shouldn't this be a core requirement?
+=======
+    "image": ["pillow"]
+>>>>>>> nick_repo/phi3vision
 }
 
 # Create the union of all our requirements

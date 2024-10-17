@@ -3,7 +3,7 @@ import re
 import textwrap
 import warnings
 
-from typing import Sequence, Union
+from typing import Optional, Sequence, Union
 
 from guidance._schema import BaseGenToken
 
@@ -37,6 +37,20 @@ _COMMON_TRANSFORMERS_KWARGS = [
     "trust_remote_code",
 ]
 
+<<<<<<< HEAD
+=======
+def load_transformers_model(model, **kwargs):
+    # intantiate the model if needed
+    if isinstance(model, str):
+
+        # make sure transformers is installed
+        if not has_transformers:
+            raise Exception(
+                "Please install transformers with `pip install transformers` in order to use guidance.models.Transformers!"
+            )
+        model = transformers_package.AutoModelForCausalLM.from_pretrained(model, **kwargs)
+    return model
+>>>>>>> nick_repo/phi3vision
 
 class ByteDecoderError(Exception):
     pass
@@ -72,7 +86,7 @@ class TransformersTokenizer(Tokenizer):
                 transformers_tokenizer, transformers_package.PreTrainedTokenizerFast
             )
             assert is_ptt or is_ptt_fast
-            byte_tokens = self._byte_tokens(transformers_tokenizer)
+            byte_tokens = self._byte_tokens(transformers_tokenizer, **kwargs)
 
         self._orig_tokenizer = transformers_tokenizer
 
@@ -103,7 +117,7 @@ class TransformersTokenizer(Tokenizer):
             tokenizer = transformers_package.AutoTokenizer.from_pretrained(
                 model, use_fast=False, **kwargs
             )
-            byte_tokens = self._byte_tokens(tokenizer)
+            byte_tokens = self._byte_tokens(tokenizer, **kwargs)
         except ImportError:
             # Raise on ImportError because it's likely a missing dependency that the user can install
             raise
@@ -135,6 +149,7 @@ class TransformersTokenizer(Tokenizer):
             "transformers_package.PreTrainedTokenizer",
             "transformers_package.PreTrainedTokenizerFast",
         ],
+        **kwargs,
     ) -> list[bytes]:
 
         if hasattr(transformers_tokenizer, "byte_decoder"):
@@ -154,6 +169,9 @@ class TransformersTokenizer(Tokenizer):
 
         if hasattr(transformers_tokenizer, "sp_model"):
             return self._byte_tokens_from_sp_model(transformers_tokenizer)
+
+        if kwargs.get("sp_whitespace", False):
+            return self._byte_tokens_from_sp_whitespace(transformers_tokenizer)
 
         try:
             return self._byte_tokens_by_encoding_token_strings(transformers_tokenizer)
@@ -194,7 +212,7 @@ class TransformersTokenizer(Tokenizer):
         transformers_tokenizer: Union[
             "transformers_package.PreTrainedTokenizer",
             "transformers_package.PreTrainedTokenizerFast",
-        ],
+        ]
     ) -> list[bytes]:
         byte_tokens = [b""] * len(transformers_tokenizer)
         special_tokens_map = {
@@ -211,6 +229,24 @@ class TransformersTokenizer(Tokenizer):
                     transformers_tokenizer.sp_model.id_to_piece(i).encode(),
                 )
             byte_tokens[i] = byte_coded.replace(space_prefix, b" ")
+        return byte_tokens
+
+    def _byte_tokens_from_sp_whitespace(
+        self,
+        transformers_tokenizer: Union[
+            "transformers_package.PreTrainedTokenizer",
+            "transformers_package.PreTrainedTokenizerFast",
+        ]
+    ) -> list[bytes]:
+        byte_tokens = [b""] * len(transformers_tokenizer)
+        if hasattr(transformers_tokenizer, "get_vocab"):
+            space_prefix = "▁".encode()
+            vocab = transformers_tokenizer.get_vocab()
+            for token, tok_id in vocab.items():
+                byte_coded = token.encode()
+                byte_tokens[tok_id] = byte_coded.replace(space_prefix, b" ")
+        else:
+            raise ValueError("Tokenizer does not have a get_vocab method")
         return byte_tokens
 
     def _byte_tokens_by_encoding_token_strings(
@@ -395,7 +431,7 @@ class TransformersEngine(Engine):
             except:
                 pass
 
-        self.model_obj = self._model(model, **kwargs)
+        self.model_obj = load_transformers_model(model, **kwargs)
 
         if not isinstance(model, str):
             self.model = model.__class__.__name__
@@ -428,19 +464,7 @@ class TransformersEngine(Engine):
             compute_log_probs=compute_log_probs,
         )
 
-    def _model(self, model, **kwargs):
-        # intantiate the model if needed
-        if isinstance(model, str):
-
-            # make sure transformers is installed
-            if not has_transformers:
-                raise Exception(
-                    "Please install transformers with `pip install transformers` in order to use guidance.models.Transformers!"
-                )
-            model = transformers_package.AutoModelForCausalLM.from_pretrained(model, **kwargs)
-        return model
-
-    def get_logits(self, token_ids):
+    def get_logits(self, prompt: bytes, token_ids: list[int], media: Optional[dict] = None):
         """Computes the logits for the given token state.
 
         This overrides a method from the LocalEngine class that is used to get
@@ -601,3 +625,4 @@ class Transformers(Model):
             ),
             echo=echo,
         )
+

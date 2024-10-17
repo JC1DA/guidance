@@ -1,6 +1,7 @@
 import json
+import logging
 import os
-from typing import Any, Generator, Optional, Tuple, Union
+from typing import Any, Generator, Optional, Sequence, Tuple, Union
 
 import llguidance  # type: ignore[import-untyped]
 import numpy as np
@@ -10,6 +11,9 @@ from ._grammar import GrammarFunction, Join, Terminal
 from ._schema import EngineOutput, GenData, EngineCallResponse, GenToken, LLInterpreterResponse
 from .models._byte_tokenizer import ByteTokenizer
 from .models._tokenizer import Tokenizer
+
+
+logger = logging.getLogger(__name__)
 
 
 class TokenParserException(Exception):
@@ -30,11 +34,10 @@ class TokenParser:
 
     def __init__(
         self,
-        grammar: Union[GrammarFunction, str],
-        tokenizer: Tokenizer,
-        prompt: bytes = b"",
-        ensure_bos_token: bool = True,
+        ll_interpreter: llguidance.LLInterpreter,
+        prompt_tokens: list[int]
     ):
+<<<<<<< HEAD
         if isinstance(grammar, GrammarFunction):
             # we can't have a terminal as the root
             if isinstance(grammar, Terminal):
@@ -51,6 +54,10 @@ class TokenParser:
             log_level=int(os.environ.get("LLGUIDANCE_LOG_LEVEL", "1")),
         )
         self._generator = self._parse(prompt, ensure_bos_token)
+=======
+        self.ll_interpreter = ll_interpreter
+        self._generator = self._parse(prompt_tokens)
+>>>>>>> nick_repo/phi3vision
         self._done = False
 
     def is_accepting(self) -> bool:
@@ -68,6 +75,7 @@ class TokenParser:
             self._done = True
             return None, e.value
 
+<<<<<<< HEAD
     def _process_prompt(self, prompt: bytes, ensure_bos_token: bool) -> Tuple[list[int], int]:
         _prompt_tokens = self.tokenizer.encode(prompt)
         prompt_tokens = self.ll_interpreter.process_prompt(_prompt_tokens)
@@ -95,6 +103,12 @@ class TokenParser:
         engine_output = None
         ff_tokens = []
 
+=======
+    def _parse(
+        self,
+        tokens: list[int],
+    ) -> Generator[Tuple[Optional[GenData], EngineCallResponse], Optional[int], EngineCallResponse]:
+>>>>>>> nick_repo/phi3vision
         while True:
             mask, resp = self.ll_interpreter.mid_process()
             r = LLInterpreterResponse.model_validate_json(resp)
@@ -200,6 +214,57 @@ class TokenParser:
         return response
 
 
+def process_prompt(prompt_tokens: Sequence[int], ll_interpreter: llguidance.LLInterpreter, bos_token_id: Optional[int]=None) -> list[int]:
+    # Allows ll_interpreter to make adjustments to prompt tokens, such as token healing
+    processed_tokens = ll_interpreter.process_prompt(prompt_tokens)
+    if (
+        bos_token_id is not None
+        and prompt_tokens[:1] != [bos_token_id]
+    ):
+        # add the beginning of sequence token if needed
+        processed_tokens = [bos_token_id] + processed_tokens
+
+    return processed_tokens
+
+
+def serialize_grammar(grammar: Union[GrammarFunction, str]) -> str:
+    if isinstance(grammar, GrammarFunction):
+        # we can't have a terminal as the root
+        if isinstance(grammar, Terminal):
+            grammar = Join([grammar])
+        return json.dumps(grammar.ll_serialize())
+    else:
+        return grammar
+
+
+def create_token_parser(
+    grammar: Union[GrammarFunction, str],
+    tokenizer: Tokenizer,
+    prompt: bytes = b"",
+    ensure_bos_token: bool = True,
+    trace: bool = False
+) -> TokenParser:
+    serialized_grammar = serialize_grammar(grammar)
+    ll_tokenizer = llguidance.LLTokenizer(
+        llguidance.TokenizerWrapper(tokenizer)
+    )
+    ll_interpreter = llguidance.LLInterpreter(
+        ll_tokenizer,
+        serialized_grammar,
+        log_level=2 if trace else int(os.environ.get("LLGUIDANCE_LOG_LEVEL", "1")),
+    )
+    if ensure_bos_token:
+        if tokenizer.bos_token_id is None:
+            logger.warning("Tokenizer does not have a BOS token, but ensure_bos_token is True")
+        bos_token_id = tokenizer.bos_token_id
+    else:
+        bos_token_id = None
+    prompt_tokens = tokenizer.encode(prompt)
+    processed_tokens = process_prompt(prompt_tokens, ll_interpreter, bos_token_id)
+    processed_tokens = tokenizer.recode(processed_tokens)
+    return TokenParser(ll_interpreter, processed_tokens)
+
+
 class ByteParserException(Exception):
     def __init__(self, *args, **kwargs):
         self.current_byte = kwargs.pop("current_byte", None)
@@ -216,7 +281,7 @@ class ByteParser:
         ensure_bos_token: bool = True,
     ):
         self.tokenizer = ByteTokenizer()
-        self.token_parser = TokenParser(grammar, self.tokenizer, prompt, ensure_bos_token)
+        self.token_parser = create_token_parser(grammar, self.tokenizer, prompt, ensure_bos_token)
         self.bytes = b""
         self.gen_data: Optional[GenData] = None
         self.pos = 0
@@ -346,3 +411,4 @@ class ByteParser:
                     pass
                 self._variables[k] = v
                 self._variables_log_probs[k] = response.capture_group_log_probs[k]
+
