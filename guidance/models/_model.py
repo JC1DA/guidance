@@ -1662,15 +1662,21 @@ def _monitor_fn(
     # print("Monitoring started")
 
     to_collect_gpu_stats = False
+    has_gpustat = False
     try:
         import gpustat
-
-        gpu_stats = gpustat.GPUStatCollection.new_query()
-        if len(gpu_stats) > 0:
-            # only collect GPU stats if there is at least one GPU
-            to_collect_gpu_stats = True
+        has_gpustat = True
     except:
         logger.warning("gpustat is not installed, run `pip install gpustat` to collect GPU stats.")
+
+    if has_gpustat:
+        try:
+            gpu_stats = gpustat.GPUStatCollection.new_query()
+            if len(gpu_stats) > 0:
+                # only collect GPU stats if there is at least one GPU
+                to_collect_gpu_stats = True
+        except:
+            logger.warning("Non-Nvidia GPU monitoring is not supported in this version.")
 
     try:
         while not stop_flag.value:
