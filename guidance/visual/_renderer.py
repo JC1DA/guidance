@@ -137,9 +137,16 @@ async def _create_queue() -> Queue:
     return Queue()
 
 
-def _on_stitch_clientmsg(recv_queue: Queue, change: dict) -> None:
+# def _on_stitch_clientmsg(recv_queue: Queue, change: dict) -> None:
+#     # NOTE(nopdive): Widget callbacks do not print to stdout/stderr nor module log.
+#     call_soon_threadsafe(recv_queue.put_nowait, change['new'])
+
+def _on_stitch_clientmsg(recv_queue_weakref: weakref.ReferenceType["Queue"], change: dict) -> None:
     # NOTE(nopdive): Widget callbacks do not print to stdout/stderr nor module log.
-    call_soon_threadsafe(recv_queue.put_nowait, change['new'])
+    print("change", change)
+    recv_queue = recv_queue_weakref()
+    if recv_queue is not None:
+        call_soon_threadsafe(recv_queue.put_nowait, change['new'])
 
 
 def _on_cell_completion(renderer_weakref: weakref.ReferenceType["Renderer"], info) -> None:
@@ -168,7 +175,7 @@ async def _handle_recv_messages(renderer_weakref: weakref.ReferenceType["Rendere
                 break
             value = await queue.get()
 
-            # logger.debug(f"RECV:raw:{value}")
+            logger.debug(f"RECV:raw:{value}")
 
             if value is None:
                 logger.debug("RECV:closing")
@@ -191,6 +198,8 @@ async def _handle_recv_messages(renderer_weakref: weakref.ReferenceType["Rendere
         except Exception as e:
             logger.error(f"RECV:err:{repr(e)}")
 
+    logger.debug("RECV:exited")
+
 
 async def _handle_send_messages(renderer_weakref: weakref.ReferenceType["Renderer"], queue_weakref: weakref.ReferenceType["Queue"]) -> None:
     logger.debug("SEND:init")
@@ -208,7 +217,7 @@ async def _handle_send_messages(renderer_weakref: weakref.ReferenceType["Rendere
             if queue is None:
                 break
             message = await queue.get()
-            # logger.debug(f"SEND:msg:{message}")
+            logger.debug(f"SEND:msg:{message}")
 
             if message is None:
                 logger.debug("SEND:closing")
@@ -227,6 +236,8 @@ async def _handle_send_messages(renderer_weakref: weakref.ReferenceType["Rendere
             renderer._send_queue.task_done()
         except Exception as e:
             logger.error(f"SEND:err:{repr(e)}")
+
+    logger.debug("SEND:exited")
 
 
 
@@ -260,10 +271,12 @@ class JupyterWidgetRenderer(Renderer):
         # Start send/recv message loops
         recv_coroutine = _handle_recv_messages(weakref.ref(self), weakref.ref(self._recv_queue))
         send_coroutine = _handle_send_messages(weakref.ref(self), weakref.ref(self._send_queue))
-        self._recv_task = run_async_coroutine(async_task(recv_coroutine)).result()
-        self._send_task = run_async_coroutine(async_task(send_coroutine)).result()
+        # self._recv_task = run_async_coroutine(async_task(recv_coroutine)).result()
+        # self._send_task = run_async_coroutine(async_task(send_coroutine)).result()
+        self._recv_task = run_async_coroutine(recv_coroutine)
+        self._send_task = run_async_coroutine(send_coroutine)
 
-        weakref.finalize(self, _cleanup, self._recv_queue, self._send_queue, f"renderer({id(self)})")
+        # weakref.finalize(self, _cleanup, self._recv_queue, self._send_queue, f"renderer({id(self)})")
 
 
     def has_divergence(self, message: GuidanceMessage) -> Tuple[bool, int]:
@@ -324,6 +337,8 @@ class JupyterWidgetRenderer(Renderer):
     def update(self, message: GuidanceMessage) -> None:
         out_messages = []
 
+        print("message", message)
+
         if isinstance(message, ExecutionCompletedMessage):
             logger.debug("RENDERER:execution end")
             self._completed = True
@@ -340,10 +355,10 @@ class JupyterWidgetRenderer(Renderer):
             out_messages.append(ExecutionStartedMessage())
             out_messages.append(MetricMessage(name="status", value='⟳'))
 
-            ipy_handle_event_once(
-                lambda x: _on_cell_completion(weakref.ref(self), x),
-                'post_run_cell'
-            )
+            # ipy_handle_event_once(
+            #     lambda x: _on_cell_completion(weakref.ref(self), x),
+            #     'post_run_cell'
+            # )
             self._need_reset = True
             self._running = True
             self._completed = False
@@ -351,6 +366,7 @@ class JupyterWidgetRenderer(Renderer):
         # Check if message has diverged from prev messages
         diverged, shared_ancestor_idx = self.has_divergence(message)
         if diverged:
+            print("RENDERER:diverged")
             out_messages.append(ResetDisplayMessage())
             out_messages[len(out_messages):] = self._messages[:shared_ancestor_idx]
             self._messages.clear()
@@ -366,7 +382,8 @@ class JupyterWidgetRenderer(Renderer):
                 self._stitch_widget.unobserve(self._stitch_on_clientmsg, names='clientmsg')
 
             self._stitch_widget = _create_stitch_widget()
-            self._stitch_on_clientmsg = lambda x: _on_stitch_clientmsg(self._recv_queue, x)
+            #self._stitch_on_clientmsg = lambda x: _on_stitch_clientmsg(self._recv_queue, x)
+            self._stitch_on_clientmsg = lambda x: _on_stitch_clientmsg(weakref.ref(self._recv_queue), x)
             self._stitch_widget.observe(self._stitch_on_clientmsg, names='clientmsg')
 
             # Redraw
@@ -386,6 +403,8 @@ class JupyterWidgetRenderer(Renderer):
 
             self._messages.append(out_message)
             call_soon_threadsafe(self._send_queue.put_nowait, out_message)
+
+        print("RENDERER:updated exitted")
 
 class DoNothingRenderer(Renderer):
     """ It does nothing. Placeholder for future renderers."""

@@ -174,7 +174,18 @@ class PostExecMetrics:
 
 def _engine_cleanup(renderer: Renderer, msg_recv: Callable[[GuidanceMessage], None], log_msg: str):
     renderer.unsubscribe(msg_recv)
+    try:
+        from ..visual._renderer import _cleanup as _renderer_cleanup
+        _renderer_cleanup(renderer._recv_queue, renderer._send_queue, "renderer")
+        renderer._stitch_widget.unobserve(renderer._stitch_on_clientmsg, names='clientmsg')
+
+    except Exception as e:
+        print(e)
     log_cleanup(log_msg)
+    print(f"ENGINE:cleanup:{log_msg}")
+    renderer._recv_task.result()
+    renderer._send_task.result()
+    del renderer
 
 
 def _wrapped_msg_recv(engine_weak_ref: weakref.ref) -> Callable[[GuidanceMessage], None]:
