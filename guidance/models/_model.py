@@ -393,7 +393,7 @@ class Engine:
         while not parser.done():
             t0 = time.time()
 
-            tokens, mask_fut, backtrack = parser.advance(engine_output)
+            tokens, ff_tokens, mask_fut, backtrack = parser.advance(engine_output)
 
             # Note that has_pending_stop implies that the response is a stop response,
             # but the converse is not true. We can therefore avoid some (but not all)
@@ -422,48 +422,20 @@ class Engine:
             if engine_output:
                 engine_response.engine_outputs.append(engine_output)
 
-            # NOTE (loc): Temporary solution to quickly check which segments are generated and which are force-forwarded to animate visualizations on the UI
-            # These tokens in chunk will not be used for final visualization
-            # TODO: This should be handled by the interpreter
+            # Quickly check which segments are generated and which are force-forwarded to animate visualizations on the UI
             if engine_response.new_bytes:
-                _tokens = parser.tokenizer.encode(engine_response.new_bytes)
-
-                ff_token_start_idx = 1
-                if engine_output is None:
-                    ff_token_start_idx = 0
-                elif engine_output.issued_token.token_id == _tokens[0]:
+                ff_token_start_idx = 0
+                if engine_output is not None and engine_output.issued_token.token_id == ff_tokens[0]:
                     # this is generated
-                    engine_response.generated_bytes = parser.tokenizer.decode([_tokens[0]])
                     engine_output.issued_token.is_generated = True
+                    # engine_response.generated_bytes = parser.tokenizer.decode([ff_tokens[0]])
+                    engine_response.generated_bytes = engine_output.issued_token.text.encode("utf-8")
                     engine_response.generated_tokens.append(engine_output.issued_token)
-                else:
-                    # check if the first byte contains the generated token
-                    generated = parser.tokenizer.decode(
-                        [engine_output.issued_token.token_id]
-                    ).decode("utf-8")
-                    force_forwarded = parser.tokenizer.decode([_tokens[0]]).decode("utf-8")
+                    ff_token_start_idx = 1
 
-                    if force_forwarded.startswith(generated):
-                        # this is marked as generated
-                        # Example: engine generates token "pl" and parser decides to backtrack and generate a new token "plate"
-                        engine_response.generated_bytes = parser.tokenizer.decode([_tokens[0]])
-                        engine_response.generated_tokens.append(
-                            GenToken(
-                                token_id=_tokens[0],
-                                prob=1.0,
-                                text=engine_response.generated_bytes.decode("utf-8"),
-                                latency_ms=engine_output.issued_token.latency_ms,
-                                is_generated=True,
-                            )
-                        )
-                    else:
-                        ff_token_start_idx = 0
-
-                if len(_tokens[ff_token_start_idx:]):
-                    engine_response.force_forwarded_bytes = parser.tokenizer.decode(
-                        _tokens[ff_token_start_idx:]
-                    )
-                    for _token in _tokens[ff_token_start_idx:]:
+                if len(ff_tokens[ff_token_start_idx:]):
+                    engine_response.force_forwarded_bytes = engine_response.new_bytes[len(engine_response.generated_bytes):]
+                    for _token in ff_tokens[ff_token_start_idx:]:
                         engine_response.force_forwarded_tokens.append(
                             GenToken(
                                 token_id=_token,

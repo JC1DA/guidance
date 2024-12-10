@@ -121,7 +121,7 @@ class TokenParser:
             compute_mask_future = self._threadpool.submit(self.compute_mask)
 
             # Send caller the mask and response; wait for token
-            engine_output = yield (tokens, compute_mask_future, backtrack)
+            engine_output = yield (tokens, ff_tokens, compute_mask_future, backtrack)
 
             # Upstairs should have already waited on this future
             mask, r = compute_mask_future.result()
@@ -221,7 +221,7 @@ class ByteParser:
         return mask
 
     def _advance(self, engine_output: Optional[EngineOutput]) -> None:
-        tokens, compute_mask_future, _ = self.token_parser.advance(engine_output)
+        tokens, _, compute_mask_future, _ = self.token_parser.advance(engine_output)
         mask, ll_response = compute_mask_future.result()
         if ll_response.stop:
             assert mask is None
