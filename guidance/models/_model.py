@@ -187,7 +187,8 @@ def _engine_cleanup(renderer: Renderer, msg_recv: Callable[[GuidanceMessage], No
         # force renderer cleanup
         # TODO: figure out why in some cases _recv_task and _send_task are not stopped
         from ..visual._renderer import _cleanup
-        _cleanup(renderer._recv_queue, renderer._send_queue, f"renderer({id(renderer)})")
+        if isinstance(renderer._renderer, JupyterWidgetRenderer):
+            _cleanup(renderer._renderer._recv_queue, renderer._renderer._send_queue, f"renderer({id(renderer)})")
     except Exception as e:
         logger.error(f"Failed to force-cleanup renderer: {e}")
 
@@ -286,8 +287,8 @@ class Engine:
 
         if renderer is None:
             self.trace_handler = TraceHandler()
-            # self.renderer = AutoRenderer(self.trace_handler)
-            self.renderer = JupyterWidgetRenderer(self.trace_handler)
+            self.renderer = AutoRenderer(self.trace_handler)
+            # self.renderer = JupyterWidgetRenderer(self.trace_handler)
         else:
             self.renderer = renderer
             self.trace_handler = renderer._trace_handler
@@ -1278,8 +1279,9 @@ class Model:
 
         # we will return a new extended version of ourselves, which we track as `lm`
         lm = self
-
-        lm.engine.metrics = lm.metrics.model_copy(deep=True)
+        lm.engine.metrics.engine_backtrack_tokens = lm.metrics.engine_backtrack_tokens
+        lm.engine.metrics.engine_input_tokens = lm.metrics.engine_input_tokens
+        lm.engine.metrics.engine_output_tokens = lm.metrics.engine_output_tokens
 
         # single generation
         if n == 1:
