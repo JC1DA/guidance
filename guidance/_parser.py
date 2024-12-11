@@ -337,7 +337,8 @@ class ByteParser:
         fake_issued_token = GenToken(
             token_id=token_id,
             prob=1.0,
-            text=self.tokenizer.decode([token_id]).decode("utf-8"),
+            # text=self.tokenizer.decode([token_id]).decode("utf-8"),
+            token_bytes=self.tokenizer.decode([token_id]),
             latency_ms=0,
             is_generated=True,
         )

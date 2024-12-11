@@ -244,8 +244,11 @@ def _msg_recv(engine_weakref: weakref.ReferenceType, message: GuidanceMessage) -
             failed = True
 
         if not failed:
-            final_text = "".join([gen_token.text for gen_token in processed_gen_tokens])
-            logger.debug(f"ENGINE:final_text:{final_text}")
+            try:
+                final_text = b''.join([gen_token.token_bytes for gen_token in processed_gen_tokens])
+                logger.debug(f"ENGINE:final_text:{final_text.decode('utf-8')}")
+            except:
+                pass
 
             tokens = [gen_token.token_id for gen_token in processed_gen_tokens]
             engine.renderer.update(
@@ -453,7 +456,8 @@ class Engine:
                             GenToken(
                                 token_id=_tokens[0],
                                 prob=1.0,
-                                text=engine_response.generated_bytes.decode("utf-8"),
+                                # text=engine_response.generated_bytes.decode("utf-8"),
+                                token_bytes=engine_response.generated_bytes,
                                 latency_ms=engine_output.issued_token.latency_ms,
                                 is_generated=True,
                             )
@@ -470,7 +474,8 @@ class Engine:
                             GenToken(
                                 token_id=_token,
                                 prob=1.0,
-                                text=parser.tokenizer.decode([_token]).decode("utf-8"),
+                                # text=parser.tokenizer.decode([_token]).decode("utf-8"),
+                                token_bytes=parser.tokenizer.decode([_token]),
                                 latency_ms=0,
                                 is_force_forwarded=True,
                             )
@@ -580,7 +585,8 @@ class Engine:
                 _issued_token = GenToken(
                     token_id=token_id,
                     prob=1.0,
-                    text=self.tokenizer.decode([token_id]).decode("utf-8"),
+                    # text=self.tokenizer.decode([token_id]).decode("utf-8"),
+                    token_bytes=self.tokenizer.decode([token_id]),
                     latency_ms=_lat,
                     is_generated=True,
                 )
@@ -602,7 +608,8 @@ class Engine:
                 GenToken(
                     token_id=token,
                     prob=prob,
-                    text=self.tokenizer.decode([token]).decode("utf-8"),
+                    # text=self.tokenizer.decode([token]).decode("utf-8"),
+                    token_bytes=self.tokenizer.decode([token]),
                     latency_ms=lat_ms,
                     is_generated=True,
                 )
@@ -652,7 +659,8 @@ class Engine:
             issued_token = GenToken(
                 token_id=sampled_index,
                 prob=sampled_prob,
-                text=self.tokenizer.decode([sampled_index]).decode("utf-8"),
+                # text=self.tokenizer.decode([sampled_index]).decode("utf-8"),
+                token_bytes=self.tokenizer.decode([sampled_index]),
                 latency_ms=lat_ms,
                 is_generated=True,
             )
@@ -1085,7 +1093,8 @@ class Model:
                             GenToken(
                                 token_id=_token,
                                 prob=1.0,
-                                text=out.engine.tokenizer.decode([_token]).decode("utf-8"),
+                                # text=out.engine.tokenizer.decode([_token]).decode("utf-8"),
+                                token_bytes=out.engine.tokenizer.decode([_token]),
                                 latency_ms=0,
                                 is_generated=False,
                                 is_force_forwarded=False,
@@ -1514,7 +1523,12 @@ class Model:
         token_texts: list[str] = []
         if text == decoded_text:
             for idx, token_id in enumerate(token_ids):
-                token_texts.append(self.engine.tokenizer.decode([token_id]).decode("utf-8"))
+                token_text = ""
+                try:
+                    token_text = self.engine.tokenizer.decode([token_id]).decode("utf-8")
+                except:
+                    token_text = str(self.engine.tokenizer.decode([token_id]))
+                token_texts.append(token_text)
         else:
             # Some models like phi-3 removes spaces and line breaks
             # Scan through the text and find the missing chunks so we can map the token back into generated chunks by the parser later on
@@ -1562,13 +1576,20 @@ class Model:
             # FIXME (loc): assume prob 1.0 for all tokens
             tokens_with_topk = []
             for token_id, token_text in zip(token_ids, token_texts):
+                token_bytes = token_text.encode("utf-8")
                 tokens_with_topk.append(
                     GenTokenExtra(
                         token_id=token_id,
                         prob=1.0,
-                        text=token_text,
+                        # text=token_text,
+                        token_bytes=token_bytes,
                         top_k=[
-                            GenToken(token_id=token_id, prob=1.0, text=token_text),
+                            GenToken(
+                                token_id=token_id, 
+                                prob=1.0, 
+                                # text=token_text,
+                                token_bytes=token_bytes,
+                                ),
                         ],
                     )
                 )
@@ -1581,7 +1602,11 @@ class Model:
         processed_gen_tokens: list[GenTokenExtra] = []
         # Map token back to generated chunk to extract correct info (is_generated, latency, etc.)
         for vis_chunk_idx, vis_chunk in enumerate(vis_chunks):
-            vis_text = vis_chunk.bytes.decode("utf-8")
+            vis_text = ""
+            try:
+                vis_text = vis_chunk.bytes.decode("utf-8")
+            except:
+                vis_text = str(vis_chunk.bytes)
 
             if not vis_text:
                 continue
@@ -1632,7 +1657,8 @@ class Model:
                 _gen_token = GenTokenExtra(
                     token_id=token_id,
                     prob=prob,
-                    text=token_text,
+                    # text=token_text,
+                    token_bytes=token_text.encode("utf-8"),
                     latency_ms=0,
                     is_input=is_input,
                     is_generated=False,
@@ -1687,11 +1713,15 @@ class Model:
                             -1 if vis_chunk_idx == 0 else gen_tokens_indices[vis_chunk_idx - 1] - 1
                         )
                         for idx in range(max_idx, prev_max_idx, -1):
+                            # if (
+                            #     self.engine.tokenizer.decode([gen_tokens_infos[idx][0]]).decode(
+                            #         "utf-8"
+                            #     )
+                            #     in _gen_token.text
+                            # ):
                             if (
-                                self.engine.tokenizer.decode([gen_tokens_infos[idx][0]]).decode(
-                                    "utf-8"
-                                )
-                                in _gen_token.text
+                                self.engine.tokenizer.decode([gen_tokens_infos[idx][0]])
+                                in _gen_token.token_bytes
                             ):
                                 _gen_token.latency_ms = gen_tokens_infos[idx][1]
                                 _masked_top_k = gen_tokens_infos[idx][2]
@@ -1722,7 +1752,12 @@ class Model:
                         _token.is_masked = False
 
             for _gen_token in _gen_tokens:
-                if _gen_token.text != "":
+                #if _gen_token.text != "":
+                if _gen_token.token_bytes != b"":
+                    try:
+                        _gen_token.text = _gen_token.token_bytes.decode("utf-8")
+                    except:
+                        _gen_token.text = str(_gen_token.token_bytes)
                     processed_gen_tokens.append(_gen_token)
 
             start_idx = end_idx + 1
@@ -1733,8 +1768,22 @@ class Model:
         if not self._variables:
             return processed_gen_tokens
         
+        def _build_string(_gen_tokens: list[GenTokenExtra]) -> str:
+            _s = ""
+
+            for _gen_token in _gen_tokens:
+                _token_string = ""
+                try:
+                    _token_string = _gen_token.token_bytes.decode("utf-8")
+                except:
+                    _token_string = str(_gen_token.token_bytes)
+                _s += _token_string
+            
+            return _s
+        
+
         def find_start_and_end_positions(chunk: str, start_idx: int, end_idx: int) -> tuple[int, int]:
-            s = "".join(gen_token.text for gen_token in processed_gen_tokens[start_idx:end_idx+1])
+            s = _build_string(processed_gen_tokens[start_idx:end_idx+1])
             if chunk not in s:
                 # chunk is not in the string
                 return (-1, -1)
@@ -1745,7 +1794,7 @@ class Model:
                 if i in traversed:
                     break
 
-                s = "".join(gen_token.text for gen_token in processed_gen_tokens[i:end_idx+1])
+                s = _build_string(processed_gen_tokens[i:end_idx+1])
                 traversed.append(i)
 
                 if chunk in s:
@@ -1762,7 +1811,7 @@ class Model:
                 if j in traversed:
                     break
 
-                s = "".join(gen_token.text for gen_token in processed_gen_tokens[start_idx:j+1])
+                s = _build_string(processed_gen_tokens[start_idx:j+1])
                 traversed.append(j)
 
                 if chunk in s:
@@ -1785,7 +1834,7 @@ class Model:
                 if start_idx == -1:
                     continue
 
-                self._variables_log_probs[k] = [{"token" : token.text, "token_id" : token.token_id, "logprob" : np.log(token.prob)} 
+                self._variables_log_probs[k] = [{"token" : token.token_bytes, "token_id" : token.token_id, "logprob" : np.log(token.prob)} 
                                                 for token in processed_gen_tokens[start_idx:end_idx+1]]
 
         return processed_gen_tokens

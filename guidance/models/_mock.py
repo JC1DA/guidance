@@ -150,12 +150,14 @@ class MockEngine(Engine):
             GenTokenExtra(
                 token_id=token_ids[0],
                 prob=1.0,
-                text=self.tokenizer.decode([token_ids[0]]).decode("utf8"),
+                # text=self.tokenizer.decode([token_ids[0]]).decode("utf8"),
+                token_bytes=self.tokenizer.decode([token_ids[0]]),
                 top_k=[
                     GenToken(
                         token_id=token_ids[0],
                         prob=1.0,
-                        text=self.tokenizer.decode([token_ids[0]]).decode("utf8"),
+                        # text=self.tokenizer.decode([token_ids[0]]).decode("utf8"),
+                        token_bytes=self.tokenizer.decode([token_ids[0]]),
                     )
                 ],
             )
@@ -177,7 +179,8 @@ class MockEngine(Engine):
                     GenToken(
                         token_id=token_id,
                         prob=_probs[token_id],
-                        text=self.tokenizer.decode([token_id]).decode("utf8"),
+                        # text=self.tokenizer.decode([token_id]).decode("utf8"),
+                        token_bytes=self.tokenizer.decode([token_id])
                     )
                 )
 
@@ -185,7 +188,8 @@ class MockEngine(Engine):
                 GenTokenExtra(
                     token_id=token_id,
                     prob=_probs[token_id],
-                    text=self.tokenizer.decode([token_id]).decode("utf-8"),
+                    # text=self.tokenizer.decode([token_id]).decode("utf-8"),
+                    token_bytes=self.tokenizer.decode([token_id]),
                     top_k=top_k_result,
                 )
             )
